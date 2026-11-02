@@ -4,7 +4,9 @@ import type { MessagePart } from "./parts";
 export type PartOp =
   | { op: "upsert"; index: number; part: MessagePart }
   | { op: "append_text"; index: number; delta: string }
-  | { op: "append_reasoning"; index: number; delta: string };
+  | { op: "append_reasoning"; index: number; delta: string }
+  | { op: "append_args"; index: number; delta: string }
+  | { op: "append_tool_log"; index: number; delta: string };
 
 /** Returns a new array (parts that change are shallow-copied) so React can diff it. */
 export function applyPartOps(parts: MessagePart[], ops: PartOp[]): MessagePart[] {
@@ -20,6 +22,10 @@ export function applyPartOps(parts: MessagePart[], ops: PartOp[]): MessagePart[]
       next[op.index] = { ...existing, text: existing.text + op.delta };
     } else if (op.op === "append_reasoning" && existing?.type === "reasoning") {
       next[op.index] = { ...existing, summary: existing.summary + op.delta };
+    } else if (op.op === "append_args" && existing?.type === "tool" && existing.tool === "function") {
+      next[op.index] = { ...existing, argsText: existing.argsText + op.delta };
+    } else if (op.op === "append_tool_log" && existing?.type === "tool" && existing.tool === "function") {
+      next[op.index] = { ...existing, log: (existing.log ?? "") + op.delta };
     }
   }
   return next;

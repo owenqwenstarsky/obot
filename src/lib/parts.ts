@@ -54,6 +54,82 @@ export type GenericToolPart = {
   raw: unknown;
 };
 
+export type FunctionToolStatus = "streaming_args" | "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export type SubagentTaskStatusValue = "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED";
+export type ArtifactKindValue = "markdown" | "html" | "react";
+
+/** Tool-specific final UI payload attached to a function tool part. */
+export type ToolDisplay =
+  | {
+      kind: "bash";
+      command: string;
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      truncated: boolean;
+    }
+  | { kind: "write_file"; path: string; bytes: number }
+  | {
+      kind: "artifact";
+      artifactId: string;
+      version: number;
+      title: string;
+      artifactKind: ArtifactKindValue;
+    }
+  | {
+      kind: "subagent";
+      taskId: string;
+      childThreadId: string;
+      title: string;
+      modelId: string;
+      status: SubagentTaskStatusValue;
+    }
+  | { kind: "json"; value: unknown };
+
+/** A locally executed function tool call (sandbox, artifacts, sub-agents, ...). */
+export type FunctionToolPart = {
+  type: "tool";
+  tool: "function";
+  id: string;
+  callId: string;
+  name: string;
+  status: FunctionToolStatus;
+  /** Raw JSON arguments as streamed by the model; renderers may partially parse it. */
+  argsText: string;
+  /** Live progress output (append-only). */
+  log?: string;
+  display?: ToolDisplay;
+  error?: string;
+  startedAt: number;
+  endedAt?: number;
+};
+
+/** A message the user sent into a running turn. Rendered as a user bubble inside the assistant reply. */
+export type SteerPart = { type: "steer"; id: string; text: string; at: number };
+
+export type NoticeKind =
+  | "task_finished"
+  | "task_failed"
+  | "task_cancelled"
+  | "interrupted"
+  | "limit_reached"
+  | "max_steps";
+
+export type NoticePart = {
+  type: "notice";
+  id: string;
+  at: number;
+  kind: NoticeKind;
+  taskId?: string;
+  childThreadId?: string;
+  title?: string;
+  message?: string;
+};
+
+/** The runtime is waiting on running sub-agents. */
+export type WaitingPart = { type: "waiting"; id: string; taskIds: string[]; startedAt: number; endedAt?: number };
+
 export type ErrorPart = {
   type: "error";
   id: string;
@@ -68,11 +144,15 @@ export type MessagePart =
   | ReasoningPart
   | WebSearchPart
   | GenericToolPart
+  | FunctionToolPart
+  | SteerPart
+  | NoticePart
+  | WaitingPart
   | ErrorPart
   | UserTextPart
   | UserImagePart;
 
-export type ToolPart = WebSearchPart | GenericToolPart;
+export type ToolPart = WebSearchPart | GenericToolPart | FunctionToolPart;
 
 export type UsageSnapshot = {
   inputTokens: number;
@@ -88,6 +168,19 @@ export type ContextSnapshot = UsageSnapshot & {
   modelId: string;
   at: string;
 };
+
+export function addUsage(a: UsageSnapshot | null, b: UsageSnapshot | null): UsageSnapshot | null {
+  if (!a) return b ? { ...b } : null;
+  if (!b) return { ...a };
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    cachedInputTokens: a.cachedInputTokens + b.cachedInputTokens,
+    cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    reasoningTokens: a.reasoningTokens + b.reasoningTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+  };
+}
 
 export function emptyUsage(): UsageSnapshot {
   return {

@@ -6,7 +6,7 @@ import { ArrowDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useChat, type TurnSettings } from "@/hooks/use-chat";
 import { useModels } from "@/hooks/queries";
-import { errorMessage } from "@/lib/api";
+import { ApiError, errorMessage } from "@/lib/api";
 import { resolveEffort, type AllowedEffort } from "@/lib/efforts";
 import { useShellUser } from "@/components/app/user-context";
 import { Composer } from "./composer";
@@ -116,11 +116,37 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
   const modelNames = useMemo(() => new Map(models.map((m) => [m.id, m.displayName])), [models]);
   const lastAssistantId = [...chat.messages].reverse().find((m) => m.role === "ASSISTANT")?.id;
 
-  async function handleSubmit(input: { text: string; attachments: { id: string; mime: string }[] }) {
+  /** Send as a new turn; if the previous run is still wrapping up, retry briefly. */
+  async function sendTurn(input: { text: string; attachments: { id: string; mime: string }[] }) {
     const s = settings();
     if (!s) throw new Error("Pick a model first.");
     stickToBottom.current = true;
-    return chat.send({ ...input, ...s });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await chat.send({ ...input, ...s });
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409 && attempt < 10) {
+          await new Promise((r) => setTimeout(r, 500));
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  async function handleSubmit(input: { text: string; attachments: { id: string; mime: string }[] }) {
+    if (chat.running && input.attachments.length === 0) {
+      stickToBottom.current = true;
+      if (await chat.steer(input.text)) return true;
+    }
+    return sendTurn(input);
+  }
+
+  async function handleInterrupt(input: { text: string; attachments: { id: string; mime: string }[] }) {
+    stickToBottom.current = true;
+    const ok = await chat.interrupt(input.text.trim() || undefined);
+    if (!ok && input.text.trim()) return sendTurn(input);
+    return true;
   }
 
   async function handleEdit(messageId: string, text: string) {
@@ -238,6 +264,8 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
           onWebSearchChange={onWebSearchChange}
           onSubmit={handleSubmit}
           onStop={() => void chat.stop()}
+          onInterrupt={handleInterrupt}
+          pendingSteers={chat.pendingSteers}
           running={chat.running}
           sending={chat.sending}
           context={chat.meta?.lastContext ?? null}

@@ -1,5 +1,6 @@
-import type { Message, Thread } from "@/generated/prisma/client";
+import type { Message, SubagentTask, Thread } from "@/generated/prisma/client";
 import type { ContextSnapshot, MessagePart } from "@/lib/parts";
+import type { ClientTask } from "@/lib/run-events";
 
 export type ClientMessage = {
   id: string;
@@ -33,12 +34,28 @@ export type ClientThread = {
   lastContext: ContextSnapshot | null;
   createdAt: string;
   lastMessageAt: string;
+  kind: "CHAT" | "SUBAGENT";
+  parentThreadId: string | null;
 };
+
+export type ThreadChild = {
+  id: string;
+  title: string;
+  running: boolean;
+  taskStatus: "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED" | null;
+};
+export type ThreadListEntry = ClientThread & { running: boolean; children: ThreadChild[] };
 
 export type ClientThreadDetail = ClientThread & {
   spentMicros: number;
   messages: ClientMessage[];
   activeRun: { id: string; messageId: string | null } | null;
+  /** For sub-agent threads: the parent thread. */
+  parent: { id: string; title: string } | null;
+  /** For sub-agent threads: this thread's task. */
+  task: ClientTask | null;
+  /** Tasks spawned from this thread. */
+  tasks: ClientTask[];
 };
 
 export type UsageLike = {
@@ -64,6 +81,21 @@ export function serializeThread(t: Thread): ClientThread {
     lastContext: (t.lastContext as ContextSnapshot | null) ?? null,
     createdAt: t.createdAt.toISOString(),
     lastMessageAt: t.lastMessageAt.toISOString(),
+    kind: t.kind,
+    parentThreadId: t.parentThreadId,
+  };
+}
+
+export function serializeTask(t: SubagentTask): ClientTask {
+  return {
+    id: t.id,
+    title: t.title,
+    childThreadId: t.childThreadId,
+    modelId: t.modelId,
+    status: t.status,
+    error: t.error,
+    createdAt: t.createdAt.toISOString(),
+    endedAt: t.endedAt?.toISOString() ?? null,
   };
 }
 

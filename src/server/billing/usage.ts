@@ -19,13 +19,15 @@ export type RecordUsageArgs = {
   threadId?: string | null;
   messageId?: string | null;
   runId?: string | null;
-  kind: "CHAT" | "TITLE";
+  kind: "CHAT" | "TITLE" | "SUBAGENT";
   modelId: string;
   effort?: string | null;
   usage: UsageSnapshot;
   webSearchCalls: number;
   responseId?: string | null;
   note?: string | null;
+  stepIndex?: number | null;
+  rootThreadId?: string | null;
 };
 
 /** Append a usage record. Records are immutable (enforced by a DB trigger). */
@@ -59,6 +61,8 @@ export async function recordUsage(args: RecordUsageArgs) {
       priced: !!price,
       priceId: price?.id ?? null,
       responseId: args.responseId ?? null,
+      stepIndex: args.stepIndex ?? null,
+      rootThreadId: args.rootThreadId ?? null,
       note: args.note ?? (cost?.longContextApplied ? "long-context pricing applied" : null),
     },
   });

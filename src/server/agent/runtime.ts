@@ -3,10 +3,39 @@ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/r
 import type { Prisma } from "@/generated/prisma/client";
 import { db } from "@/server/db";
 import { llm } from "@/server/llm/client";
-import { RunManager } from "@/server/agent/run-manager";
-import { recordUsage } from "@/server/billing/usage";
+import { RunManager, type RunFinish, type RunHandle, type StartRunParams } from "@/server/agent/run-manager";
+import type { ToolServices } from "@/server/agent/tools/types";
+import { checkCanRun, recordUsage } from "@/server/billing/usage";
 import type { StreamEvent } from "@/server/llm/stream-normalizer";
 import { emptyUsage, type ContextSnapshot } from "@/lib/parts";
+
+const json = (v: unknown) => v as unknown as Prisma.InputJsonValue;
+
+type ServiceFactory = (p: StartRunParams, h: RunHandle) => Partial<Omit<ToolServices, "steering">>;
+type SettledHook = (r: RunFinish) => void | Promise<void>;
+
+/**
+ * Feature modules register per-run services and run-settled hooks here at import time,
+ * keeping this module free of feature dependencies.
+ */
+const g = globalThis as unknown as {
+  __obotRuns?: RunManager;
+  __obotServiceFactories?: Map<string, ServiceFactory>;
+  __obotSettledHooks?: Map<string, SettledHook>;
+  __obotWatcherFactory?: (p: StartRunParams) => ReturnType<NonNullable<ConstructorParameters<typeof RunManager>[0]["watcher"]>>;
+};
+const serviceFactories = (g.__obotServiceFactories ??= new Map());
+const settledHooks = (g.__obotSettledHooks ??= new Map());
+
+export function registerServiceFactory(name: string, f: ServiceFactory) {
+  serviceFactories.set(name, f);
+}
+export function registerSettledHook(name: string, h: SettledHook) {
+  settledHooks.set(name, h);
+}
+export function registerWatcherFactory(f: NonNullable<typeof g.__obotWatcherFactory>) {
+  g.__obotWatcherFactory = f;
+}
 
 function createManager() {
   return new RunManager({
@@ -14,18 +43,40 @@ function createManager() {
       const stream = await llm().responses.create(body as ResponseCreateParamsStreaming, { signal });
       return stream as unknown as AsyncIterable<StreamEvent>;
     },
-    saveParts: async (messageId, parts) => {
+    saveProgress: async (messageId, parts, transcript) => {
       await db.message.updateMany({
         where: { id: messageId, status: "STREAMING" },
-        data: { parts: parts as unknown as Prisma.InputJsonValue },
+        data: { parts: json(parts), ...(transcript ? { rawOutput: json(transcript) } : {}) },
       });
+    },
+    recordStep: async (s) => {
+      const record = await recordUsage({
+        userId: s.userId,
+        threadId: s.threadId,
+        rootThreadId: s.rootThreadId,
+        messageId: s.messageId,
+        runId: s.runId,
+        kind: s.usageKind,
+        modelId: s.modelId,
+        effort: s.effort,
+        usage: s.usage ?? emptyUsage(),
+        webSearchCalls: s.webSearchCalls,
+        responseId: s.responseId,
+        stepIndex: s.stepIndex,
+        note: s.usage ? null : `no usage reported (step ${s.outcome})`,
+      });
+      return { costMicros: Number(record.costMicros) };
+    },
+    canContinue: async (p) => {
+      const gate = await checkCanRun(p.userId, p.modelHasPrice ?? true);
+      return gate.allowed ? { allowed: true } : { allowed: false, message: gate.message };
     },
     finish: async (r) => {
       await db.message.updateMany({
         where: { id: r.messageId },
         data: {
-          parts: r.parts as unknown as Prisma.InputJsonValue,
-          rawOutput: r.rawOutput as unknown as Prisma.InputJsonValue,
+          parts: json(r.parts),
+          rawOutput: json(r.rawOutput),
           status: r.messageStatus,
           error: r.error,
           responseId: r.responseId,
@@ -33,35 +84,29 @@ function createManager() {
       });
       await db.run.update({
         where: { id: r.runId },
-        data: { status: r.runStatus, error: r.error, endedAt: new Date() },
+        data: { status: r.runStatus, error: r.error, endedAt: new Date(), steps: r.steps },
       });
-      if (r.usage) {
-        const ctx: ContextSnapshot = { ...r.usage, modelId: r.modelId, at: new Date().toISOString() };
-        await db.thread.update({
-          where: { id: r.threadId },
-          data: { lastContext: ctx as unknown as Prisma.InputJsonValue },
-        });
+      if (r.contextUsage) {
+        const ctx: ContextSnapshot = { ...r.contextUsage, modelId: r.modelId, at: new Date().toISOString() };
+        await db.thread.update({ where: { id: r.threadId }, data: { lastContext: json(ctx) } });
       }
-      const record = await recordUsage({
-        userId: r.userId,
-        threadId: r.threadId,
-        messageId: r.messageId,
-        runId: r.runId,
-        kind: "CHAT",
-        modelId: r.modelId,
-        effort: r.effort,
-        usage: r.usage ?? emptyUsage(),
-        webSearchCalls: r.webSearchCalls,
-        responseId: r.responseId,
-        note: r.usage ? null : `no usage reported (run ${r.runStatus.toLowerCase()})`,
-      });
-      return { costMicros: Number(record.costMicros) };
+    },
+    services: (p, h) => {
+      let out: Partial<Omit<ToolServices, "steering">> = {};
+      for (const f of serviceFactories.values()) out = { ...out, ...f(p, h) };
+      return out;
+    },
+    watcher: (p) => g.__obotWatcherFactory?.(p) ?? null,
+    onSettled: (r) => {
+      for (const [name, h] of settledHooks) {
+        Promise.resolve()
+          .then(() => h(r))
+          .catch((err) => console.error(`[runs] settled hook ${name} failed`, err));
+      }
     },
     log: (msg, err) => console.error(msg, err),
   });
 }
-
-const g = globalThis as unknown as { __obotRuns?: RunManager };
 
 export function runs(): RunManager {
   if (!g.__obotRuns) g.__obotRuns = createManager();
@@ -71,6 +116,10 @@ export function runs(): RunManager {
 /** Called once at server boot: any run left RUNNING by a previous process is dead. */
 export async function recoverInterruptedRuns() {
   const stale = await db.run.findMany({ where: { status: "RUNNING" }, select: { id: true, assistantMessageId: true } });
+  await db.subagentTask.updateMany({
+    where: { status: "RUNNING" },
+    data: { status: "INTERRUPTED", endedAt: new Date(), error: "Server restarted while this task was running." },
+  });
   if (stale.length === 0) return 0;
   await db.run.updateMany({
     where: { id: { in: stale.map((r) => r.id) } },

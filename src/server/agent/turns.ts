@@ -8,7 +8,7 @@ import { getSelectableModel } from "@/server/llm/models";
 import type { CatalogModel } from "@/server/llm/catalog";
 import { buildResponsesRequest, type HistoryMessage } from "@/server/llm/request-builder";
 import { checkCanRun } from "@/server/billing/usage";
-import { getSettings, webSearchContextSize } from "@/server/settings";
+import { getAgentFlags, getSettings, webSearchContextSize } from "@/server/settings";
 import { attachmentDataUrl } from "@/server/uploads/storage";
 import { MAX_IMAGES_PER_MESSAGE } from "@/server/uploads/image-type";
 import { runs } from "@/server/agent/runtime";
@@ -16,6 +16,10 @@ import { applyTitle, generateTitle } from "@/server/agent/titles";
 import { serializeMessage, serializeThread } from "@/server/agent/serialize";
 import { resolveEffort } from "@/lib/efforts";
 import type { MessagePart } from "@/lib/parts";
+import { toolRegistry } from "@/server/agent/tools";
+import { buildInstructions } from "@/server/agent/system-prompt";
+import type { ThreadKindValue } from "@/server/agent/tools/types";
+import "@/server/agent/features";
 
 export type TurnOptions = {
   modelId: string;
@@ -29,6 +33,12 @@ export async function getOwnedThread(user: CurrentUser, threadId: string): Promi
   const thread = await db.thread.findFirst({ where: { id: threadId, userId: user.id, deletedAt: null } });
   if (!thread) throw notFound("Thread");
   return thread;
+}
+
+function assertChatThread(thread: Thread) {
+  if (thread.kind === "SUBAGENT") {
+    throw badRequest("Sub-agent threads are driven by their parent agent and can't be messaged directly.");
+  }
 }
 
 async function assertNoActiveRun(threadId: string) {
@@ -62,6 +72,7 @@ async function loadHistory(threadId: string, before: Date): Promise<{ history: H
   const history: HistoryMessage[] = messages.map((m) => ({
     role: m.role,
     parts: (m.parts as unknown as MessagePart[]) ?? [],
+    transcript: m.rawOutput,
   }));
   const attachmentIds = history.flatMap((h) =>
     h.parts.filter((p) => p.type === "user_image").map((p) => (p as { attachmentId: string }).attachmentId),
@@ -79,22 +90,42 @@ async function loadHistory(threadId: string, before: Date): Promise<{ history: H
   return { history, images };
 }
 
-/** Creates the assistant message + run and starts streaming. */
-async function startAssistantTurn(args: {
-  user: CurrentUser;
+export type LaunchRunArgs = {
+  userId: string;
   thread: Thread;
   model: CatalogModel;
   effort: string | null;
   webSearch: boolean;
   /** The assistant message is created 1ms after this so ordering is stable. */
   after: Date;
-  isFirstTurn: boolean;
-  firstMessageText?: string;
-}) {
-  const { user, thread, model, effort, webSearch } = args;
+  kind?: ThreadKindValue;
+  parentRunId?: string | null;
+  /** Top-level thread (sandbox owner). Defaults to the thread's parent or itself. */
+  rootThreadId?: string;
+  systemPromptSuffix?: string | null;
+  /** Generate a title from this first message. */
+  title?: { firstMessageText: string } | null;
+  firstStepToolChoice?: { type: "function"; name: string };
+  meta?: Record<string, unknown>;
+};
+
+/** Creates the assistant message + run and starts the agent loop in the background. */
+export async function launchAssistantRun(args: LaunchRunArgs) {
+  const { thread, model, effort, webSearch } = args;
+  const kind = args.kind ?? "CHAT";
   const settings = await getSettings();
+  const flags = await getAgentFlags(settings);
+  const tools = toolRegistry.select({ threadKind: kind, model, flags });
+  const instructions = buildInstructions({
+    adminPrompt: settings.systemPrompt,
+    kind,
+    toolNames: tools.names(),
+    flags,
+    suffix: args.systemPromptSuffix,
+  });
   const createdAt = new Date(Math.max(Date.now(), args.after.getTime() + 1));
   const runId = randomUUID();
+  const rootThreadId = args.rootThreadId ?? thread.parentThreadId ?? thread.id;
 
   const assistant = await db.message.create({
     data: {
@@ -109,7 +140,15 @@ async function startAssistantTurn(args: {
     },
   });
   await db.run.create({
-    data: { id: runId, threadId: thread.id, userId: user.id, assistantMessageId: assistant.id, status: "RUNNING" },
+    data: {
+      id: runId,
+      threadId: thread.id,
+      userId: args.userId,
+      assistantMessageId: assistant.id,
+      status: "RUNNING",
+      kind,
+      parentRunId: args.parentRunId ?? null,
+    },
   });
   const updatedThread = await db.thread.update({
     where: { id: thread.id },
@@ -117,6 +156,7 @@ async function startAssistantTurn(args: {
   });
 
   const { history, images } = await loadHistory(thread.id, createdAt);
+  const replayReasoning = model.replayReasoning && tools.size > 0;
   const body = buildResponsesRequest({
     model: model.id,
     effort: effort as never,
@@ -127,25 +167,36 @@ async function startAssistantTurn(args: {
       contextSize: webSearchContextSize(settings.webSearchContextSize),
       allowedDomains: settings.webSearchAllowedDomains,
     },
-    systemPrompt: settings.systemPrompt,
+    systemPrompt: instructions,
     supportsReasoning: model.supportsReasoning,
+    replayReasoning,
   });
 
   runs().start({
     runId,
     threadId: thread.id,
-    userId: user.id,
+    userId: args.userId,
     messageId: assistant.id,
     modelId: model.id,
     effort,
     body,
+    rootThreadId,
+    kind,
+    parentRunId: args.parentRunId ?? null,
+    modelHasPrice: model.hasPrice,
+    tools,
+    maxSteps: kind === "SUBAGENT" ? settings.subagentMaxSteps : settings.agentMaxSteps,
+    usageKind: kind === "SUBAGENT" ? "SUBAGENT" : "CHAT",
+    replayReasoning,
+    firstStepToolChoice: args.firstStepToolChoice,
+    meta: args.meta,
   });
 
-  if (args.isFirstTurn && !thread.titleGenerated && args.firstMessageText) {
+  if (args.title && !thread.titleGenerated) {
     void generateTitle({
-      userId: user.id,
+      userId: args.userId,
       threadId: thread.id,
-      firstMessage: args.firstMessageText,
+      firstMessage: args.title.firstMessageText,
       fallbackModelId: model.id,
     }).then(async (title) => {
       await applyTitle(thread.id, title);
@@ -154,6 +205,27 @@ async function startAssistantTurn(args: {
   }
 
   return { runId, assistant: serializeMessage(assistant), thread: serializeThread(updatedThread) };
+}
+
+async function startAssistantTurn(args: {
+  user: CurrentUser;
+  thread: Thread;
+  model: CatalogModel;
+  effort: string | null;
+  webSearch: boolean;
+  after: Date;
+  isFirstTurn: boolean;
+  firstMessageText?: string;
+}) {
+  return launchAssistantRun({
+    userId: args.user.id,
+    thread: args.thread,
+    model: args.model,
+    effort: args.effort,
+    webSearch: args.webSearch,
+    after: args.after,
+    title: args.isFirstTurn && args.firstMessageText ? { firstMessageText: args.firstMessageText } : null,
+  });
 }
 
 function userParts(text: string, attachments: { id: string; mime: string }[]): MessagePart[] {
@@ -187,6 +259,7 @@ export async function sendMessage(
   let isFirstTurn: boolean;
   if (args.threadId) {
     thread = await getOwnedThread(user, args.threadId);
+    assertChatThread(thread);
     await assertNoActiveRun(thread.id);
     isFirstTurn = (await db.message.count({ where: { threadId: thread.id } })) === 0;
   } else {
@@ -235,7 +308,16 @@ async function deleteMessagesAfter(threadId: string, pivot: Message, inclusive: 
     select: { id: true },
   });
   const ids = later.map((m) => m.id).filter((id) => inclusive || id !== pivot.id);
-  if (ids.length) await db.message.deleteMany({ where: { id: { in: ids } } });
+  if (ids.length === 0) return;
+  // Sub-agent threads spawned by the dropped turns go with them.
+  const tasks = await db.subagentTask.findMany({ where: { parentMessageId: { in: ids } }, select: { childThreadId: true } });
+  if (tasks.length) {
+    await db.thread.updateMany({
+      where: { id: { in: tasks.map((t) => t.childThreadId) } },
+      data: { deletedAt: new Date() },
+    });
+  }
+  await db.message.deleteMany({ where: { id: { in: ids } } });
 }
 
 async function getOwnedMessage(user: CurrentUser, messageId: string) {
@@ -248,6 +330,7 @@ async function getOwnedMessage(user: CurrentUser, messageId: string) {
 export async function editMessage(user: CurrentUser, messageId: string, args: TurnOptions & { text: string }) {
   const message = await getOwnedMessage(user, messageId);
   if (message.role !== "USER") throw badRequest("Only your own messages can be edited.");
+  assertChatThread(message.thread);
   await assertNoActiveRun(message.threadId);
   const { model, effort, webSearch } = await resolveTurn(user, args);
 
@@ -279,6 +362,7 @@ export async function editMessage(user: CurrentUser, messageId: string, args: Tu
 export async function regenerateMessage(user: CurrentUser, messageId: string, args: TurnOptions) {
   const message = await getOwnedMessage(user, messageId);
   if (message.role !== "ASSISTANT") throw badRequest("Only assistant replies can be regenerated.");
+  assertChatThread(message.thread);
   await assertNoActiveRun(message.threadId);
   const { model, effort, webSearch } = await resolveTurn(user, args);
 

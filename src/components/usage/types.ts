@@ -30,7 +30,7 @@ export type UsageRecordRow = {
   userEmail: string;
   userName: string;
   threadId: string | null;
-  kind: "CHAT" | "TITLE";
+  kind: "CHAT" | "TITLE" | "SUBAGENT";
   modelId: string;
   effort: string | null;
   inputTokens: number;

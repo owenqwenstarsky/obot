@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { applyPartOps, type PartOp } from "@/lib/part-ops";
 import type { ContextSnapshot } from "@/lib/parts";
-import type { RunEvent } from "@/lib/run-events";
+import type { ClientTask, PendingSteer, RunEvent, RunPhase } from "@/lib/run-events";
 import type { ClientMessage, ClientThread, ClientThreadDetail } from "@/server/agent/serialize";
 import type { ThreadListItem } from "@/hooks/queries";
 
@@ -26,6 +26,9 @@ export type ThreadMeta = {
   lastEffort: string | null;
   lastContext: ContextSnapshot | null;
   spentMicros: number;
+  kind: "CHAT" | "SUBAGENT";
+  parent: { id: string; title: string } | null;
+  task: ClientTask | null;
 };
 
 type ActiveRun = { id: string; messageId: string };
@@ -62,6 +65,9 @@ export function useChat(initialThreadId: string | null) {
   const [loading, setLoading] = useState<boolean>(!!initialThreadId);
   const [notFound, setNotFound] = useState(false);
   const [sending, setSending] = useState(false);
+  const [phase, setPhase] = useState<RunPhase | null>(null);
+  const [pendingSteers, setPendingSteers] = useState<PendingSteer[]>([]);
+  const [tasks, setTasks] = useState<ClientTask[]>([]);
 
   const streamAbort = useRef<AbortController | null>(null);
   const lastSeq = useRef(0);
@@ -84,7 +90,11 @@ export function useChat(initialThreadId: string | null) {
       lastEffort: d.lastEffort,
       lastContext: d.lastContext,
       spentMicros: d.spentMicros,
+      kind: d.kind,
+      parent: d.parent,
+      task: d.task,
     });
+    setTasks(d.tasks);
     return d;
   }, []);
 
@@ -123,7 +133,38 @@ export function useChat(initialThreadId: string | null) {
 
   const markThreadRunning = useCallback(
     (id: string, running: boolean) => {
-      qc.setQueryData<ThreadListItem[]>(["threads"], (old) => old?.map((t) => (t.id === id ? { ...t, running } : t)));
+      qc.setQueryData<ThreadListItem[]>(["threads"], (old) =>
+        old?.map((t) =>
+          t.id === id
+            ? { ...t, running }
+            : t.children.some((c) => c.id === id)
+              ? { ...t, children: t.children.map((c) => (c.id === id ? { ...c, running } : c)) }
+              : t,
+        ),
+      );
+    },
+    [qc],
+  );
+
+  /** Keep the sidebar's nested sub-agent list in sync with task events. */
+  const upsertTaskInSidebar = useCallback(
+    (parentId: string, task: ClientTask) => {
+      qc.setQueryData<ThreadListItem[]>(["threads"], (old) =>
+        old?.map((t) => {
+          if (t.id !== parentId) return t;
+          const child = {
+            id: task.childThreadId,
+            title: task.title,
+            running: task.status === "RUNNING",
+            taskStatus: task.status,
+          };
+          const exists = t.children.some((c) => c.id === child.id);
+          return {
+            ...t,
+            children: exists ? t.children.map((c) => (c.id === child.id ? child : c)) : [...t.children, child],
+          };
+        }),
+      );
     },
     [qc],
   );
@@ -149,9 +190,22 @@ export function useChat(initialThreadId: string | null) {
             ops = ops.concat(e.ops);
           } else if (e.type === "title") {
             setThreadTitle(e.threadId, e.title);
+          } else if (e.type === "phase") {
+            setPhase(e.phase);
+          } else if (e.type === "steer_queue") {
+            setPendingSteers(e.pending);
+          } else if (e.type === "task") {
+            const task = e.task;
+            setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev.map((t) => (t.id === task.id ? task : t)) : [...prev, task]));
+            upsertTaskInSidebar(tId, task);
           } else if (e.type === "done") {
             finished = true;
-            ops = [];
+            if (ops.length) {
+              // Flush ops batched before `done` so nothing is lost; done.parts then replaces them.
+              ops = [];
+            }
+            setPhase(null);
+            setPendingSteers([]);
             updateMessage(run.messageId, (m) => ({
               ...m,
               parts: e.parts,
@@ -170,13 +224,15 @@ export function useChat(initialThreadId: string | null) {
                   }
                 : m.usage,
             }));
-            if (e.usage) {
-              const usage = e.usage;
+            if (e.contextUsage || e.costMicros) {
+              const ctxUsage = e.contextUsage;
               setMeta((m) =>
                 m
                   ? {
                       ...m,
-                      lastContext: { ...usage, modelId: m.lastModelId ?? "", at: new Date().toISOString() },
+                      lastContext: ctxUsage
+                        ? { ...ctxUsage, modelId: m.lastModelId ?? "", at: new Date().toISOString() }
+                        : m.lastContext,
                       spentMicros: m.spentMicros + e.costMicros,
                     }
                   : m,
@@ -232,7 +288,7 @@ export function useChat(initialThreadId: string | null) {
         if (mounted.current) void refreshMeta(tId);
       }, 4000);
     },
-    [markThreadRunning, qc, refreshMeta, setThreadTitle, updateMessage],
+    [markThreadRunning, qc, refreshMeta, setThreadTitle, updateMessage, upsertTaskInSidebar],
   );
 
   // Initial load (and reattach to a live run).
@@ -272,6 +328,9 @@ export function useChat(initialThreadId: string | null) {
         lastEffort: res.thread.lastEffort,
         lastContext: m?.lastContext ?? res.thread.lastContext,
         spentMicros: m?.spentMicros ?? 0,
+        kind: res.thread.kind,
+        parent: m?.parent ?? null,
+        task: m?.task ?? null,
       }));
       lastSeq.current = 0;
       void connect({ id: res.runId, messageId: res.assistant.id }, res.thread.id);
@@ -316,7 +375,7 @@ export function useChat(initialThreadId: string | null) {
           setThreadId(res.thread.id);
           window.history.replaceState(null, "", `/t/${res.thread.id}`);
           qc.setQueryData<ThreadListItem[]>(["threads"], (old) => [
-            { ...res.thread, running: true },
+            { ...res.thread, running: true, children: [] },
             ...(old ?? []).filter((t) => t.id !== res.thread.id),
           ]);
         } else {
@@ -369,6 +428,43 @@ export function useChat(initialThreadId: string | null) {
     await api(`/api/runs/${activeRun.id}/stop`, { method: "POST" }).catch(() => undefined);
   }, [activeRun]);
 
+  /**
+   * Send a message into the running turn. Returns false if the run had already finished,
+   * in which case the caller should send it as a normal message.
+   */
+  const steer = useCallback(
+    async (text: string): Promise<boolean> => {
+      if (!activeRun) return false;
+      const res = await api<{ accepted: boolean; steer: PendingSteer | null }>(`/api/runs/${activeRun.id}/steer`, {
+        method: "POST",
+        json: { text },
+      });
+      if (res.accepted && res.steer) {
+        const s = res.steer;
+        setPendingSteers((prev) => (prev.some((p) => p.id === s.id) ? prev : [...prev, s]));
+      }
+      return res.accepted;
+    },
+    [activeRun],
+  );
+
+  /** Abort the current generation only (sub-agents keep running); optionally send `text` right away. */
+  const interrupt = useCallback(
+    async (text?: string): Promise<boolean> => {
+      if (!activeRun) return false;
+      const res = await api<{ interrupted: boolean; accepted: boolean }>(`/api/runs/${activeRun.id}/interrupt`, {
+        method: "POST",
+        json: text ? { text } : {},
+      });
+      return !text || res.accepted;
+    },
+    [activeRun],
+  );
+
+  const cancelTask = useCallback(async (taskId: string) => {
+    await api(`/api/tasks/${taskId}/cancel`, { method: "POST" });
+  }, []);
+
   const setWebSearchForThread = useCallback(
     (enabled: boolean) => {
       setMeta((m) => (m ? { ...m, webSearchEnabled: enabled } : m));
@@ -386,7 +482,13 @@ export function useChat(initialThreadId: string | null) {
     loading,
     notFound,
     sending,
+    phase,
+    pendingSteers,
+    tasks,
     send,
+    steer,
+    interrupt,
+    cancelTask,
     edit,
     regenerate,
     stop,

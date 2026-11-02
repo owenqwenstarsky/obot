@@ -43,8 +43,10 @@ export const GET = handler(async (req: Request, ctx: Ctx) => {
       parts: ((m?.parts as unknown as MessagePart[]) ?? []),
       error: run.error,
       usage: null,
+      contextUsage: null,
       costMicros: 0,
       webSearchCalls: 0,
+      steps: run.steps,
     };
     return new Response(encoder.encode(`data: ${JSON.stringify(done)}\n\n`), { headers });
   }

@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, ImagePlus, Loader2, Square, X } from "lucide-react";
+import { ArrowUp, Clock, ImagePlus, Loader2, Square, X, Zap } from "lucide-react";
 import { toast } from "sonner";
 import type { CatalogModel } from "@/server/llm/catalog";
 import type { ContextSnapshot } from "@/lib/parts";
+import type { PendingSteer } from "@/lib/run-events";
 import { ApiError, errorMessage } from "@/lib/api";
 import { ModelSelector } from "./model-selector";
 import { WebSearchToggle } from "./web-search-toggle";
@@ -37,6 +38,8 @@ export function Composer({
   onWebSearchChange,
   onSubmit,
   onStop,
+  onInterrupt,
+  pendingSteers = [],
   running,
   sending,
   context,
@@ -51,6 +54,9 @@ export function Composer({
   onWebSearchChange: (enabled: boolean) => void;
   onSubmit: (input: ComposerSubmit) => Promise<boolean>;
   onStop: () => void;
+  /** Abort the current generation only (sub-agents keep running), sending any typed text right away. */
+  onInterrupt?: (input: ComposerSubmit) => Promise<boolean>;
+  pendingSteers?: PendingSteer[];
   running: boolean;
   sending: boolean;
   context: ContextSnapshot | null;
@@ -121,7 +127,22 @@ export function Composer({
   );
 
   const uploading = images.some((i) => i.status === "uploading");
-  const canSend = !running && !sending && !uploading && !!modelId && (text.trim().length > 0 || images.length > 0);
+  // While a run is active, text-only messages are queued into it ("steering").
+  const canSend = running
+    ? !sending && !uploading && images.length === 0 && text.trim().length > 0
+    : !sending && !uploading && !!modelId && (text.trim().length > 0 || images.length > 0);
+
+  async function interrupt() {
+    if (!onInterrupt || sending) return;
+    const prevText = text;
+    setText("");
+    try {
+      await onInterrupt({ text, attachments: [] });
+    } catch (err) {
+      setText(prevText);
+      toast.error(errorMessage(err));
+    }
+  }
 
   async function submit() {
     if (!canSend) return;
@@ -162,6 +183,17 @@ export function Composer({
         void addFiles(Array.from(e.dataTransfer.files));
       }}
     >
+      {running && pendingSteers.length > 0 && (
+        <div className="flex flex-col gap-1 px-3 pt-3">
+          {pendingSteers.map((s) => (
+            <div key={s.id} className="flex min-w-0 items-center gap-2 rounded-lg bg-muted/60 px-2.5 py-1.5 text-xs text-muted-foreground">
+              <Clock className="size-3.5 shrink-0" />
+              <span className="shrink-0 font-medium text-foreground/80">Queued</span>
+              <span className="truncate">{s.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2 px-3 pt-3">
           {images.map((img) => (
@@ -207,14 +239,20 @@ export function Composer({
           }
         }}
         rows={1}
-        placeholder={models.length === 0 ? "No models available yet" : "Ask the agent anything…"}
+        placeholder={
+          models.length === 0
+            ? "No models available yet"
+            : running
+              ? "Message the agent while it works…"
+              : "Ask the agent anything…"
+        }
         className="scrollbar-thin block max-h-[280px] min-h-[52px] w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] leading-6 outline-none placeholder:text-muted-foreground"
       />
 
       <div className="flex min-w-0 items-center gap-1 px-2 pb-2">
         <ModelSelector models={models} modelId={modelId} effort={effort} onChange={onModelChange} />
         <WebSearchToggle enabled={webSearch} supported={!!model?.supportsWebSearch} onChange={onWebSearchChange} />
-        {visionOk && (
+        {visionOk && !running && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -256,14 +294,54 @@ export function Composer({
             }
           />
           {running ? (
-            <button
-              type="button"
-              onClick={onStop}
-              className="flex size-9 items-center justify-center rounded-xl bg-foreground text-background transition-opacity hover:opacity-85"
-              aria-label="Stop"
-            >
-              <Square className="size-3.5 fill-current" />
-            </button>
+            <>
+              {onInterrupt && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => void interrupt()}
+                      className="flex size-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      aria-label={text.trim() ? "Interrupt and send now" : "Interrupt"}
+                    >
+                      <Zap className="size-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {text.trim() ? "Interrupt & send now" : "Interrupt the current step"} (sub-agents keep running)
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {text.trim().length > 0 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => void submit()}
+                      disabled={!canSend}
+                      className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                      aria-label="Queue message"
+                    >
+                      <ArrowUp className="size-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>Send when the agent reaches its next step</TooltipContent>
+                </Tooltip>
+              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={onStop}
+                    className="flex size-9 items-center justify-center rounded-xl bg-foreground text-background transition-opacity hover:opacity-85"
+                    aria-label="Stop"
+                  >
+                    <Square className="size-3.5 fill-current" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Stop everything, including sub-agents</TooltipContent>
+              </Tooltip>
+            </>
           ) : (
             <button
               type="button"

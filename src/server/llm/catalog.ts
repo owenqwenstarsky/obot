@@ -25,6 +25,10 @@ export type CatalogModel = {
   supportsReasoning: boolean;
   supportsWebSearch: boolean;
   supportsImageInput: boolean;
+  /** Local function tools (sandbox, artifacts, sub-agents). */
+  supportsFunctionTools: boolean;
+  /** Replay encrypted reasoning between tool calls (OpenAI-style reasoning models). */
+  replayReasoning: boolean;
   longContextThreshold: number | null;
   hasMetadata: boolean;
   enabled: boolean;
@@ -72,6 +76,8 @@ export function toCatalogModel(row: ModelRowLike, hasPrice: boolean): CatalogMod
       supportsReasoning: efforts.length > 0,
       supportsWebSearch: meta.supportsWebSearch,
       supportsImageInput: meta.supportsImageInput,
+      supportsFunctionTools: true,
+      replayReasoning: efforts.length > 0,
       longContextThreshold: meta.longContextThresholdTokens,
       hasMetadata: true,
       enabled: row.enabled,
@@ -95,6 +101,9 @@ export function toCatalogModel(row: ModelRowLike, hasPrice: boolean): CatalogMod
     supportsReasoning: efforts.length > 0,
     supportsWebSearch: openaiLike,
     supportsImageInput: false,
+    // CLIProxyAPI translates function tools for every upstream it supports.
+    supportsFunctionTools: true,
+    replayReasoning: openaiLike,
     longContextThreshold: null,
     hasMetadata: false,
     enabled: row.enabled,
