@@ -18,6 +18,9 @@ function serialize(s: Awaited<ReturnType<typeof getSettings>>) {
     titleModelId: s.titleModelId,
     titleEffort: s.titleEffort,
     systemPrompt: s.systemPrompt,
+    agentMaxSteps: s.agentMaxSteps,
+    sandboxEnabled: s.sandboxEnabled,
+    sandboxPythonEnabled: s.sandboxPythonEnabled,
     modelsSyncedAt: s.modelsSyncedAt?.toISOString() ?? null,
   };
 }
@@ -39,6 +42,9 @@ const schema = z.object({
   titleModelId: z.string().max(200).nullable().optional(),
   titleEffort: z.string().max(20).nullable().optional(),
   systemPrompt: z.string().max(20_000).nullable().optional(),
+  agentMaxSteps: z.number().int().min(1).max(200).optional(),
+  sandboxEnabled: z.boolean().optional(),
+  sandboxPythonEnabled: z.boolean().optional(),
 });
 
 export const PATCH = handler(async (req: Request) => {

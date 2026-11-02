@@ -2,7 +2,7 @@ import "server-only";
 import { db } from "@/server/db";
 import type { CurrentUser } from "@/server/auth/session";
 import { getOwnedThread } from "@/server/agent/turns";
-import { runs } from "@/server/agent/runtime";
+import { runs, threadDeleteHooks } from "@/server/agent/runtime";
 import { HttpError } from "@/server/auth/errors";
 import {
   serializeMessage,
@@ -132,15 +132,6 @@ export async function updateThread(
   return serializeThread(thread);
 }
 
-type DeleteHook = (threadId: string) => Promise<void>;
-const gd = globalThis as unknown as { __obotThreadDeleteHooks?: Map<string, DeleteHook> };
-const deleteHooks: Map<string, DeleteHook> = (gd.__obotThreadDeleteHooks ??= new Map());
-
-/** Features register cleanup for deleted top-level threads (e.g. sandbox snapshots). */
-export function registerThreadDeleteHook(name: string, hook: DeleteHook) {
-  deleteHooks.set(name, hook);
-}
-
 /** Soft delete; stops any live run first (which cancels its sub-agents). Usage records are untouched. */
 export async function deleteThread(user: CurrentUser, threadId: string) {
   const thread = await getOwnedThread(user, threadId);
@@ -152,7 +143,7 @@ export async function deleteThread(user: CurrentUser, threadId: string) {
   const now = new Date();
   await db.thread.update({ where: { id: threadId }, data: { deletedAt: now, pinned: false } });
   await db.thread.updateMany({ where: { parentThreadId: threadId, deletedAt: null }, data: { deletedAt: now } });
-  for (const [name, hook] of deleteHooks) {
+  for (const [name, hook] of threadDeleteHooks()) {
     await hook(threadId).catch((err: unknown) => console.error(`[threads] delete hook ${name} failed`, err));
   }
 }

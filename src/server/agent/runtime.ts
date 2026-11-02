@@ -13,6 +13,7 @@ const json = (v: unknown) => v as unknown as Prisma.InputJsonValue;
 
 type ServiceFactory = (p: StartRunParams, h: RunHandle) => Partial<Omit<ToolServices, "steering">>;
 type SettledHook = (r: RunFinish) => void | Promise<void>;
+type DeleteHook = (threadId: string) => Promise<void>;
 
 /**
  * Feature modules register per-run services and run-settled hooks here at import time,
@@ -22,10 +23,20 @@ const g = globalThis as unknown as {
   __obotRuns?: RunManager;
   __obotServiceFactories?: Map<string, ServiceFactory>;
   __obotSettledHooks?: Map<string, SettledHook>;
+  __obotThreadDeleteHooks?: Map<string, DeleteHook>;
   __obotWatcherFactory?: (p: StartRunParams) => ReturnType<NonNullable<ConstructorParameters<typeof RunManager>[0]["watcher"]>>;
 };
 const serviceFactories = (g.__obotServiceFactories ??= new Map());
 const settledHooks = (g.__obotSettledHooks ??= new Map());
+const deleteHooks: Map<string, DeleteHook> = (g.__obotThreadDeleteHooks ??= new Map());
+
+/** Features register cleanup for deleted top-level threads (e.g. sandbox snapshots). */
+export function registerThreadDeleteHook(name: string, hook: DeleteHook) {
+  deleteHooks.set(name, hook);
+}
+export function threadDeleteHooks(): Iterable<[string, DeleteHook]> {
+  return deleteHooks.entries();
+}
 
 export function registerServiceFactory(name: string, f: ServiceFactory) {
   serviceFactories.set(name, f);

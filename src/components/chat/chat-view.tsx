@@ -11,6 +11,7 @@ import { resolveEffort, type AllowedEffort } from "@/lib/efforts";
 import { useShellUser } from "@/components/app/user-context";
 import { Composer } from "./composer";
 import { AssistantMessage, UserMessage } from "./message";
+import { SandboxFiles } from "./sandbox-files";
 import type { CatalogModel } from "@/server/llm/catalog";
 
 const LAST_SELECTION_KEY = "obot:last-selection";
@@ -189,6 +190,11 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      {chat.threadId && (
+        <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
+          <SandboxFiles threadId={chat.threadId} running={chat.running} />
+        </div>
+      )}
       <div ref={scrollRef} onScroll={onScroll} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         {chat.loading ? (
           <div className="flex h-full items-center justify-center">
