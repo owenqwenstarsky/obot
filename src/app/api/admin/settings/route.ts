@@ -21,6 +21,7 @@ function serialize(s: Awaited<ReturnType<typeof getSettings>>) {
     agentMaxSteps: s.agentMaxSteps,
     sandboxEnabled: s.sandboxEnabled,
     sandboxPythonEnabled: s.sandboxPythonEnabled,
+    inlineUiEnabled: s.inlineUiEnabled,
     modelsSyncedAt: s.modelsSyncedAt?.toISOString() ?? null,
   };
 }
@@ -45,6 +46,7 @@ const schema = z.object({
   agentMaxSteps: z.number().int().min(1).max(200).optional(),
   sandboxEnabled: z.boolean().optional(),
   sandboxPythonEnabled: z.boolean().optional(),
+  inlineUiEnabled: z.boolean().optional(),
 });
 
 export const PATCH = handler(async (req: Request) => {

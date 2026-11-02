@@ -30,6 +30,7 @@ type Settings = {
   agentMaxSteps: number;
   sandboxEnabled: boolean;
   sandboxPythonEnabled: boolean;
+  inlineUiEnabled: boolean;
 };
 
 type Form = {
@@ -46,6 +47,7 @@ type Form = {
   agentMaxSteps: string;
   sandboxEnabled: boolean;
   sandboxPythonEnabled: boolean;
+  inlineUiEnabled: boolean;
 };
 
 function toForm(s: Settings): Form {
@@ -63,6 +65,7 @@ function toForm(s: Settings): Form {
     agentMaxSteps: String(s.agentMaxSteps),
     sandboxEnabled: s.sandboxEnabled,
     sandboxPythonEnabled: s.sandboxPythonEnabled,
+    inlineUiEnabled: s.inlineUiEnabled,
   };
 }
 
@@ -104,6 +107,7 @@ export function AdminSettings() {
           agentMaxSteps: Number(f.agentMaxSteps),
           sandboxEnabled: f.sandboxEnabled,
           sandboxPythonEnabled: f.sandboxPythonEnabled,
+          inlineUiEnabled: f.inlineUiEnabled,
         },
       });
     },
@@ -272,6 +276,15 @@ export function AdminSettings() {
             />
             <p className="text-xs text-muted-foreground">Each model call counts as a step (1–200). Stops runaway tool loops.</p>
           </div>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Inline UI in replies</span>
+              <span className="block text-xs text-muted-foreground">
+                Lets the agent render cards, stats, callouts and tables in chat using the built-in UI kit (sanitized, no scripts).
+              </span>
+            </span>
+            <Switch checked={form.inlineUiEnabled} onCheckedChange={(v) => set("inlineUiEnabled", v)} />
+          </label>
           <label className="flex items-center justify-between gap-4 text-sm">
             <span>
               <span className="font-medium">Bash sandbox</span>
