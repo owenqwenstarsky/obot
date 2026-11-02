@@ -64,6 +64,18 @@ enum UsageKind {
   SUBAGENT
 }
 
+enum ArtifactKind {
+  MARKDOWN
+  HTML
+  REACT
+}
+
+enum ArtifactStatus {
+  GENERATING
+  READY
+  FAILED
+}
+
 enum ThreadKind {
   CHAT
   SUBAGENT
@@ -104,6 +116,7 @@ model User {
   attachments    Attachment[]
   runs           Run[]
   usageRecords   UsageRecord[]
+  artifacts      Artifact[]
   invitesCreated Invite[]      @relation("InviteCreatedBy")
   invitesUsed    Invite[]      @relation("InviteUsedBy")
   pricesCreated  ModelPrice[]
@@ -270,6 +283,7 @@ model Thread {
   runs             Run[]
   spawnedTasks     SubagentTask[] @relation("TaskParent")
   task             SubagentTask?  @relation("TaskChild")
+  artifacts        Artifact[]
 
   @@index([userId, deletedAt, lastMessageAt])
   @@index([parentThreadId])
@@ -421,4 +435,43 @@ model UsageRecord {
   @@index([rootThreadId])
   @@index([createdAt])
   @@map("usage_record")
+}
+
+// ───────────────────────────── Artifacts ─────────────────────────────
+
+/// A saved document/app the agent created on request. Every update adds a version.
+model Artifact {
+  id             String            @id @default(cuid())
+  userId         String
+  user           User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  threadId       String
+  thread         Thread            @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  title          String
+  kind           ArtifactKind
+  status         ArtifactStatus    @default(READY)
+  currentVersion Int               @default(0)
+  runId          String?
+  error          String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  deletedAt      DateTime?
+  versions       ArtifactVersion[]
+
+  @@index([userId, deletedAt, updatedAt])
+  @@index([threadId])
+  @@map("artifact")
+}
+
+model ArtifactVersion {
+  id         String   @id @default(cuid())
+  artifactId String
+  artifact   Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  version    Int
+  title      String
+  content    String
+  messageId  String?
+  createdAt  DateTime @default(now())
+
+  @@unique([artifactId, version])
+  @@map("artifact_version")
 }

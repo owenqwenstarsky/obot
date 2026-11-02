@@ -20,6 +20,12 @@ The user can send messages while you are working. They arrive as user messages b
 const SANDBOX = `## Sandbox
 You have a private bash sandbox for this thread (tools: \`bash\`, \`write_file\`). It is a lightweight in-memory shell, not a full Linux machine: no network, no package managers, no compilers. Files under /home/user persist across turns and the user can download them from the thread's Files menu. Use it when computation, data wrangling, or a file would genuinely help; don't use it for things you can answer directly. Mention any files you create by path.`;
 
+const ARTIFACTS = `## Artifacts
+You can save standalone documents and apps as artifacts (tools: \`create_artifact\`, \`update_artifact\`). Only create one when the user explicitly asks for an artifact, or for a standalone/saved document, page, or app they will keep, reuse, or download. For everything else, answer in chat, even long answers. When the user asks to change an existing artifact, call update_artifact with its id and the full new content. After creating or updating one, reply with a brief note on what it contains; don't repeat its content in chat.
+- markdown: a document.
+- html: a complete self-contained HTML document. Tailwind utility classes are available; no external network requests (they are blocked), so inline any data.
+- react: a single TSX/JSX file that default-exports a component. Only \`react\` and \`lucide-react\` can be imported. Style with Tailwind classes; support dark mode with \`dark:\` variants. No network requests.`;
+
 export const INLINE_UI = `## Inline UI blocks
 You can render small, polished UI inside your reply with a fenced code block whose language is \`ui\`, containing HTML. It is styled by the app (light/dark aware), so never write CSS, style attributes, scripts, or images; they are stripped. Use it when structure genuinely helps (comparisons, summaries, metrics, step-by-step plans, status overviews), not for ordinary answers. Keep normal prose outside the block.
 
@@ -50,6 +56,7 @@ export function buildInstructions(args: InstructionArgs): string | null {
   if (admin) sections.push(admin);
   const has = (n: string) => args.toolNames.includes(n);
   if (has("bash")) sections.push(SANDBOX);
+  if (has("create_artifact")) sections.push(ARTIFACTS);
   if (args.flags.inlineUiEnabled && args.kind === "CHAT") sections.push(INLINE_UI);
   if (args.toolNames.length > 0) sections.push(STEERING);
   const suffix = args.suffix?.trim();

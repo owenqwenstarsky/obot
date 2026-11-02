@@ -385,3 +385,69 @@ export async function regenerateMessage(user: CurrentUser, messageId: string, ar
     isFirstTurn: false,
   });
 }
+
+const KIND_HINT: Record<string, string> = {
+  markdown: "a markdown document",
+  html: "a self-contained HTML page",
+  react: "a React component",
+};
+
+/**
+ * "New artifact" from the Artifacts page: creates a regular thread plus a GENERATING placeholder
+ * artifact, and starts a run that is forced to call create_artifact first. Returns immediately.
+ */
+export async function startArtifactGeneration(
+  user: CurrentUser,
+  args: TurnOptions & { prompt: string; kind?: "markdown" | "html" | "react" | null },
+) {
+  const prompt = args.prompt.trim().slice(0, 20_000);
+  if (!prompt) throw badRequest("Describe what you want to create.");
+  const settings = await getSettings();
+  if (!settings.artifactsEnabled) throw badRequest("Artifacts are turned off on this instance.");
+  const { model, effort, webSearch } = await resolveTurn(user, args);
+  if (!model.supportsFunctionTools) throw badRequest("That model can't create artifacts. Pick another one.");
+
+  const thread = await db.thread.create({
+    data: { userId: user.id, webSearchEnabled: webSearch, lastModelId: model.id, lastEffort: effort },
+  });
+  const userMessage = await db.message.create({
+    data: {
+      threadId: thread.id,
+      role: "USER",
+      parts: json(userParts(prompt, [])),
+      status: "COMPLETE",
+      createdAt: new Date(),
+    },
+  });
+  const kind = args.kind ?? null;
+  const artifact = await db.artifact.create({
+    data: {
+      userId: user.id,
+      threadId: thread.id,
+      title: prompt.split("\n")[0].slice(0, 80) || "New artifact",
+      kind: kind === "html" ? "HTML" : kind === "react" ? "REACT" : "MARKDOWN",
+      status: "GENERATING",
+      currentVersion: 0,
+    },
+  });
+  const suffix = [
+    "The user started this thread from the Artifacts page, so they explicitly want an artifact.",
+    `Create it with create_artifact${kind ? ` as ${KIND_HINT[kind]} (kind: ${kind})` : ", choosing the most suitable kind"}.`,
+    "Gather anything you need first only if essential; then reply with a short summary of what you made.",
+  ].join(" ");
+
+  const turn = await launchAssistantRun({
+    userId: user.id,
+    thread,
+    model,
+    effort,
+    webSearch,
+    after: userMessage.createdAt,
+    systemPromptSuffix: suffix,
+    title: { firstMessageText: prompt },
+    firstStepToolChoice: { type: "function", name: "create_artifact" },
+    meta: { pendingArtifactId: artifact.id },
+  });
+  await db.artifact.update({ where: { id: artifact.id }, data: { runId: turn.runId } });
+  return { artifactId: artifact.id, threadId: thread.id, runId: turn.runId, thread: turn.thread };
+}

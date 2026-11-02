@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated bundle (scripts/build-artifact-runtime.mjs).
+    "public/artifact-runtime/**",
   ]),
 ]);
 

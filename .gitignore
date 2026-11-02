@@ -44,3 +44,6 @@ next-env.d.ts
 /src/generated/
 /data/
 !.env.example
+
+# generated artifact runtime
+/public/artifact-runtime/

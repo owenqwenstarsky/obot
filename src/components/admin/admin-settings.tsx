@@ -31,6 +31,7 @@ type Settings = {
   sandboxEnabled: boolean;
   sandboxPythonEnabled: boolean;
   inlineUiEnabled: boolean;
+  artifactsEnabled: boolean;
 };
 
 type Form = {
@@ -48,6 +49,7 @@ type Form = {
   sandboxEnabled: boolean;
   sandboxPythonEnabled: boolean;
   inlineUiEnabled: boolean;
+  artifactsEnabled: boolean;
 };
 
 function toForm(s: Settings): Form {
@@ -66,6 +68,7 @@ function toForm(s: Settings): Form {
     sandboxEnabled: s.sandboxEnabled,
     sandboxPythonEnabled: s.sandboxPythonEnabled,
     inlineUiEnabled: s.inlineUiEnabled,
+    artifactsEnabled: s.artifactsEnabled,
   };
 }
 
@@ -108,6 +111,7 @@ export function AdminSettings() {
           sandboxEnabled: f.sandboxEnabled,
           sandboxPythonEnabled: f.sandboxPythonEnabled,
           inlineUiEnabled: f.inlineUiEnabled,
+          artifactsEnabled: f.artifactsEnabled,
         },
       });
     },
@@ -284,6 +288,15 @@ export function AdminSettings() {
               </span>
             </span>
             <Switch checked={form.inlineUiEnabled} onCheckedChange={(v) => set("inlineUiEnabled", v)} />
+          </label>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Artifacts</span>
+              <span className="block text-xs text-muted-foreground">
+                Saved markdown documents, HTML pages and React apps, created when people ask. React and HTML run in a sandboxed frame with no network.
+              </span>
+            </span>
+            <Switch checked={form.artifactsEnabled} onCheckedChange={(v) => set("artifactsEnabled", v)} />
           </label>
           <label className="flex items-center justify-between gap-4 text-sm">
             <span>

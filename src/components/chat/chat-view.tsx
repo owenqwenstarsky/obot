@@ -12,6 +12,7 @@ import { useShellUser } from "@/components/app/user-context";
 import { Composer } from "./composer";
 import { AssistantMessage, UserMessage } from "./message";
 import { SandboxFiles } from "./sandbox-files";
+import { ArtifactPanelHost } from "@/components/artifacts/artifact-panel";
 import type { CatalogModel } from "@/server/llm/catalog";
 
 const LAST_SELECTION_KEY = "obot:last-selection";
@@ -189,7 +190,7 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
   const busy = chat.running || chat.sending;
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <ArtifactPanelHost>
       {chat.threadId && (
         <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
           <SandboxFiles threadId={chat.threadId} running={chat.running} />
@@ -282,6 +283,6 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
           Agents can make mistakes. Check important info.
         </p>
       </div>
-    </div>
+    </ArtifactPanelHost>
   );
 }

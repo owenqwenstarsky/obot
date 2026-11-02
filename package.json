@@ -3,8 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/build-artifact-runtime.mjs",
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "node scripts/build-artifact-runtime.mjs && prisma generate && next build",
+    "build:artifact-runtime": "node scripts/build-artifact-runtime.mjs",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
@@ -46,6 +48,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@tailwindcss/browser": "^4.3.4",
     "@tailwindcss/turbopack": "^4",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^20",
@@ -53,10 +56,12 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^18.0.9",
+    "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.4.4",
     "jsdom": "^30.1.3",
     "prisma": "7.10.1",
+    "sucrase": "^3.35.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5",
