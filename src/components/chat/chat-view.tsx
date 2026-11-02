@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Loader2 } from "lucide-react";
+import { ArrowDown, Bot, CornerLeftUp, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
 import { useChat, type TurnSettings } from "@/hooks/use-chat";
 import { useModels } from "@/hooks/queries";
@@ -13,6 +13,8 @@ import { Composer } from "./composer";
 import { AssistantMessage, UserMessage } from "./message";
 import { SandboxFiles } from "./sandbox-files";
 import { ArtifactPanelHost } from "@/components/artifacts/artifact-panel";
+import { ChatTasksContext } from "./tasks-context";
+import { Button } from "@/components/ui/button";
 import type { CatalogModel } from "@/server/llm/catalog";
 
 const LAST_SELECTION_KEY = "obot:last-selection";
@@ -116,6 +118,13 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
   }
 
   const modelNames = useMemo(() => new Map(models.map((m) => [m.id, m.displayName])), [models]);
+  const { tasks: chatTasks, cancelTask } = chat;
+  const tasksApi = useMemo(
+    () => ({ tasks: new Map(chatTasks.map((t) => [t.id, t])), cancel: cancelTask }),
+    [chatTasks, cancelTask],
+  );
+  const isSubagent = chat.meta?.kind === "SUBAGENT";
+  const childTask = chat.meta?.task ?? null;
   const lastAssistantId = [...chat.messages].reverse().find((m) => m.role === "ASSISTANT")?.id;
 
   /** Send as a new turn; if the previous run is still wrapping up, retry briefly. */
@@ -187,102 +196,139 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
   }
 
   const empty = !chat.loading && chat.messages.length === 0;
-  const busy = chat.running || chat.sending;
+  const busy = chat.running || chat.sending || isSubagent;
 
   return (
-    <ArtifactPanelHost>
-      {chat.threadId && (
-        <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
-          <SandboxFiles threadId={chat.threadId} running={chat.running} />
-        </div>
-      )}
-      <div ref={scrollRef} onScroll={onScroll} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-        {chat.loading ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : empty ? (
-          <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-6 pb-24 text-center">
-            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              How can I help, {user.name.split(" ")[0]}?
-            </h1>
-            <p className="mt-2 max-w-md text-sm text-muted-foreground">
-              Start a thread with the agent. Turn on <span className="font-medium text-foreground">Search</span> to let it browse
-              the web and cite its sources.
-            </p>
-            {!modelsLoading && models.length === 0 && (
-              <p className="mt-6 rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
-                No models are enabled yet.{" "}
-                {user.role === "ADMIN" ? (
-                  <Link href="/admin/models" className="text-primary hover:underline">
-                    Enable models in Admin
-                  </Link>
-                ) : (
-                  "Ask an admin to enable some."
-                )}
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="mx-auto flex max-w-3xl flex-col gap-8 px-4 pt-14 pb-8 sm:px-6">
-            {chat.messages.map((m) =>
-              m.role === "USER" ? (
-                <UserMessage
-                  key={m.id}
-                  message={m}
-                  canEdit={!busy && !m.id.startsWith("temp_")}
-                  onEdit={(text) => handleEdit(m.id, text)}
-                />
-              ) : (
-                <AssistantMessage
-                  key={m.id}
-                  message={m}
-                  modelName={m.modelId ? (modelNames.get(m.modelId) ?? null) : null}
-                  canRegenerate={!busy && m.id === lastAssistantId}
-                  isLast={m.id === lastAssistantId}
-                  onRegenerate={() => handleRegenerate(m.id)}
-                />
-              ),
-            )}
+    <ChatTasksContext.Provider value={tasksApi}>
+      <ArtifactPanelHost>
+        {isSubagent && chat.meta?.parent && (
+          <div className="absolute inset-x-0 top-0 z-10 flex justify-center px-4 pt-3 md:pl-28">
+            <div className="flex max-w-full items-center gap-2 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-sm backdrop-blur">
+              <Bot className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="shrink-0 text-muted-foreground">Sub-agent of</span>
+              <Link href={`/t/${chat.meta.parent.id}`} className="flex min-w-0 items-center gap-1 font-medium hover:underline">
+                <CornerLeftUp className="size-3 shrink-0" />
+                <span className="truncate">{chat.meta.parent.title}</span>
+              </Link>
+              {childTask && (
+                <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {chat.running ? "Running" : childTask.status.charAt(0) + childTask.status.slice(1).toLowerCase()}
+                </span>
+              )}
+            </div>
           </div>
         )}
-      </div>
+        {chat.threadId && (
+          <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
+            <SandboxFiles threadId={chat.threadId} running={chat.running} />
+          </div>
+        )}
+        <div ref={scrollRef} onScroll={onScroll} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+          {chat.loading ? (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : empty ? (
+            <div className="mx-auto flex h-full max-w-3xl flex-col items-center justify-center px-6 pb-24 text-center">
+              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                How can I help, {user.name.split(" ")[0]}?
+              </h1>
+              <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                Start a thread with the agent. Turn on <span className="font-medium text-foreground">Search</span> to let it browse
+                the web and cite its sources.
+              </p>
+              {!modelsLoading && models.length === 0 && (
+                <p className="mt-6 rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
+                  No models are enabled yet.{" "}
+                  {user.role === "ADMIN" ? (
+                    <Link href="/admin/models" className="text-primary hover:underline">
+                      Enable models in Admin
+                    </Link>
+                  ) : (
+                      "Ask an admin to enable some."
+                  )}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="mx-auto flex max-w-3xl flex-col gap-8 px-4 pt-14 pb-8 sm:px-6">
+              {chat.messages.map((m) =>
+                m.role === "USER" ? (
+                  <UserMessage
+                    key={m.id}
+                    message={m}
+                    canEdit={!busy && !m.id.startsWith("temp_")}
+                    onEdit={(text) => handleEdit(m.id, text)}
+                  />
+                ) : (
+                  <AssistantMessage
+                    key={m.id}
+                    message={m}
+                    modelName={m.modelId ? (modelNames.get(m.modelId) ?? null) : null}
+                    canRegenerate={!busy && m.id === lastAssistantId}
+                    isLast={m.id === lastAssistantId}
+                    onRegenerate={() => handleRegenerate(m.id)}
+                  />
+                ),
+              )}
+            </div>
+          )}
+        </div>
 
-      {showJump && (
-        <button
-          type="button"
-          onClick={() => {
-            stickToBottom.current = true;
-            scrollToBottom(true);
-          }}
-          className="absolute bottom-36 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-md hover:text-foreground"
-        >
-          <ArrowDown className="size-3.5" /> Jump to latest
-        </button>
-      )}
+        {showJump && (
+          <button
+            type="button"
+            onClick={() => {
+              stickToBottom.current = true;
+              scrollToBottom(true);
+            }}
+            className="absolute bottom-36 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-md hover:text-foreground"
+          >
+            <ArrowDown className="size-3.5" /> Jump to latest
+          </button>
+        )}
 
-      <div className="mx-auto w-full max-w-3xl px-3 pb-3 sm:px-6 sm:pb-4">
-        <Composer
-          models={models}
-          modelId={modelId}
-          effort={effort}
-          webSearch={webSearch}
-          onModelChange={onModelChange}
-          onWebSearchChange={onWebSearchChange}
-          onSubmit={handleSubmit}
-          onStop={() => void chat.stop()}
-          onInterrupt={handleInterrupt}
-          pendingSteers={chat.pendingSteers}
-          running={chat.running}
-          sending={chat.sending}
-          context={chat.meta?.lastContext ?? null}
-          spentMicros={chat.meta?.spentMicros ?? 0}
-          autoFocus
-        />
-        <p className="mt-2 text-center text-[11px] text-muted-foreground/70">
-          Agents can make mistakes. Check important info.
-        </p>
-      </div>
-    </ArtifactPanelHost>
+        {isSubagent ? (
+          <div className="mx-auto flex w-full max-w-3xl flex-col items-center gap-2 px-3 pb-4 sm:px-6">
+            {chat.running && childTask ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void chat.cancelTask(childTask.id).catch((err) => toast.error(errorMessage(err)));
+                }}
+              >
+                <Square className="size-3 fill-current" /> Cancel sub-agent
+              </Button>
+            ) : null}
+            <p className="text-center text-xs text-muted-foreground">
+              Sub-agent threads are read-only. Their final message is sent back to the parent agent.
+            </p>
+          </div>
+        ) : (
+          <div className="mx-auto w-full max-w-3xl px-3 pb-3 sm:px-6 sm:pb-4">
+            <Composer
+              models={models}
+              modelId={modelId}
+              effort={effort}
+              webSearch={webSearch}
+              onModelChange={onModelChange}
+              onWebSearchChange={onWebSearchChange}
+              onSubmit={handleSubmit}
+              onStop={() => void chat.stop()}
+              onInterrupt={handleInterrupt}
+              pendingSteers={chat.pendingSteers}
+              running={chat.running}
+              sending={chat.sending}
+              context={chat.meta?.lastContext ?? null}
+              spentMicros={chat.meta?.spentMicros ?? 0}
+              autoFocus
+            />
+            <p className="mt-2 text-center text-[11px] text-muted-foreground/70">
+              Agents can make mistakes. Check important info.
+            </p>
+          </div>
+        )}
+      </ArtifactPanelHost>
+    </ChatTasksContext.Provider>
   );
 }

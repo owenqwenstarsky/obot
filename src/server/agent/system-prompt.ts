@@ -26,6 +26,19 @@ You can save standalone documents and apps as artifacts (tools: \`create_artifac
 - html: a complete self-contained HTML document. Tailwind utility classes are available; no external network requests (they are blocked), so inline any data.
 - react: a single TSX/JSX file that default-exports a component. Only \`react\` and \`lucide-react\` can be imported. Style with Tailwind classes; support dark mode with \`dark:\` variants. No network requests.`;
 
+const SUBAGENTS = `## Sub-agents
+You can delegate work to sub-agents: separate agents that run in parallel in their own threads (tools: \`subagent_capabilities\`, \`delegate_task\`, \`wait_tasks\`, \`task_status\`, \`task_cancel\`).
+
+When to use them: genuinely independent pieces of work that can run in parallel, or work that means reading/researching broadly where you only need the conclusion. A sub-agent costs more than it looks: it knows only your brief, you only see its final message, and several at once spend a burst of tokens. Do the work yourself when it's a handful of tool calls or a quick lookup. When in doubt, don't delegate.
+
+How to use them:
+- Call \`subagent_capabilities\` once before your first \`delegate_task\` in a turn, and pick a model whose description fits the task.
+- Brief each sub-agent like a capable peer: the goal, the relevant facts, what you've already ruled out, the exact deliverable, and an explicit, narrow scope. The brief is its only context; if you can't write a clear brief, you don't understand the task well enough to hand it off.
+- Once you've delegated something, don't also do it yourself.
+- Don't poll. After delegating, either continue with other work or end your turn. The runtime keeps waiting while sub-agents run and wakes you with a notification each time one finishes. When a notification arrives, review the result critically (sub-agents can be confidently wrong), briefly acknowledge it to the user in chat, and continue; you'll keep waiting automatically for the rest. Use \`wait_tasks\` only if you need a result before you can do anything else in this step.
+- Cancel tasks you no longer need with \`task_cancel\`. A re-check or follow-up is always a new \`delegate_task\` that includes the prior findings in its brief; you can't message a running sub-agent.
+- Never invent or predict a sub-agent's results; only report what it actually returned.`;
+
 export const INLINE_UI = `## Inline UI blocks
 You can render small, polished UI inside your reply with a fenced code block whose language is \`ui\`, containing HTML. It is styled by the app (light/dark aware), so never write CSS, style attributes, scripts, or images; they are stripped. Use it when structure genuinely helps (comparisons, summaries, metrics, step-by-step plans, status overviews), not for ordinary answers. Keep normal prose outside the block.
 
@@ -57,6 +70,7 @@ export function buildInstructions(args: InstructionArgs): string | null {
   const has = (n: string) => args.toolNames.includes(n);
   if (has("bash")) sections.push(SANDBOX);
   if (has("create_artifact")) sections.push(ARTIFACTS);
+  if (has("delegate_task")) sections.push(SUBAGENTS);
   if (args.flags.inlineUiEnabled && args.kind === "CHAT") sections.push(INLINE_UI);
   if (args.toolNames.length > 0) sections.push(STEERING);
   const suffix = args.suffix?.trim();

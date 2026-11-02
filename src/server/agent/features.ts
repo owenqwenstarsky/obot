@@ -3,7 +3,13 @@
  * happens before any run starts.
  */
 import "server-only";
-import { registerServiceFactory, registerSettledHook, registerThreadDeleteHook } from "@/server/agent/runtime";
+import {
+  registerServiceFactory,
+  registerSettledHook,
+  registerThreadDeleteHook,
+  registerWatcherFactory,
+} from "@/server/agent/runtime";
+import { subagents } from "@/server/subagents";
 import { sandboxes } from "@/server/sandbox";
 import { prismaArtifactStore } from "@/server/artifacts";
 import { createArtifactApi, finalizePendingArtifact } from "@/server/artifacts/core";
@@ -35,3 +41,22 @@ registerSettledHook("artifacts", async (r) => {
   if (typeof pendingArtifactId !== "string") return;
   await finalizePendingArtifact(prismaArtifactStore, { pendingArtifactId, runStatus: r.runStatus, error: r.error });
 });
+
+registerServiceFactory("subagents", (p) => {
+  if ((p.kind ?? "CHAT") !== "CHAT") return {};
+  return {
+    tasks: subagents().toolApi({
+      runId: p.runId,
+      threadId: p.threadId,
+      rootThreadId: p.rootThreadId ?? p.threadId,
+      userId: p.userId,
+      messageId: p.messageId,
+      modelId: p.modelId,
+      webSearch: p.meta?.webSearch === true,
+    }),
+  };
+});
+
+registerWatcherFactory((p) => ((p.kind ?? "CHAT") === "CHAT" ? subagents().watcher(p.runId) : null));
+
+registerSettledHook("subagents", (r) => subagents().handleRunSettled(r));

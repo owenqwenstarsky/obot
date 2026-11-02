@@ -23,6 +23,9 @@ function serialize(s: Awaited<ReturnType<typeof getSettings>>) {
     sandboxPythonEnabled: s.sandboxPythonEnabled,
     inlineUiEnabled: s.inlineUiEnabled,
     artifactsEnabled: s.artifactsEnabled,
+    subagentsEnabled: s.subagentsEnabled,
+    subagentMaxConcurrent: s.subagentMaxConcurrent,
+    subagentMaxSteps: s.subagentMaxSteps,
     modelsSyncedAt: s.modelsSyncedAt?.toISOString() ?? null,
   };
 }
@@ -49,6 +52,9 @@ const schema = z.object({
   sandboxPythonEnabled: z.boolean().optional(),
   inlineUiEnabled: z.boolean().optional(),
   artifactsEnabled: z.boolean().optional(),
+  subagentsEnabled: z.boolean().optional(),
+  subagentMaxConcurrent: z.number().int().min(1).max(8).optional(),
+  subagentMaxSteps: z.number().int().min(1).max(200).optional(),
 });
 
 export const PATCH = handler(async (req: Request) => {

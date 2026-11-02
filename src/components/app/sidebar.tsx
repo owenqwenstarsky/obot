@@ -97,7 +97,7 @@ export function Sidebar({ onCollapse, onNavigate }: { onCollapse: () => void; on
             <div className="px-2 pt-2 pb-1 text-xs font-medium text-primary/90">{g.label}</div>
             <ul className="space-y-0.5">
               {g.items.map((t) => (
-                <ThreadItem key={t.id} thread={t} active={t.id === activeId} />
+                <ThreadItem key={t.id} thread={t} active={t.id === activeId} activeId={activeId} />
               ))}
             </ul>
           </div>

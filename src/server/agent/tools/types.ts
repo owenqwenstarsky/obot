@@ -68,7 +68,10 @@ export type WaitOutcome = {
 export interface SubagentToolApi {
   capabilities(): Promise<Record<string, unknown>>;
   delegate(args: { title: string; prompt: string; model?: string; effort?: string; callId: string }): Promise<TaskInfo>;
-  waitAny(taskIds: string[], opts: { timeoutMs: number; signal: AbortSignal }): Promise<WaitOutcome>;
+  waitAny(
+    taskIds: string[],
+    opts: { timeoutMs: number; signal: AbortSignal; onSteer?: (cb: () => void) => () => void },
+  ): Promise<WaitOutcome>;
   status(taskIds?: string[]): Promise<TaskInfo[]>;
   cancel(taskId: string): Promise<TaskInfo>;
 }

@@ -66,12 +66,23 @@ The image runs `prisma migrate deploy` on start, then the Next.js standalone ser
 
 `POST /api/threads/:id/messages` validates the request, checks limits, and creates the user message, an empty assistant message, and a `Run`. It starts the run in the background and returns immediately.
 
-- **Request**: the run calls `/v1/responses` with `stream: true, store: false`. Each turn replays the thread history statelessly: user text and images, plus the assistant's final text. When reasoning is on, the request asks for `reasoning: { effort, summary: "auto" }`. When Search is on, it adds `tools: [{ type: "web_search", search_context_size, filters? }]` and `include: ["web_search_call.action.sources"]`.
+- **Request**: the run calls `/v1/responses` with `stream: true, store: false`. Each turn replays the thread history statelessly: user text and images, plus each assistant turn's stored transcript (its text, function calls and their outputs; older rows fall back to final text). When reasoning is on, the request asks for `reasoning: { effort, summary: "auto" }`. When Search is on, it adds `tools: [{ type: "web_search", search_context_size, filters? }]` and `include: ["web_search_call.action.sources"]`.
 - **Normalizing**: `src/server/llm/stream-normalizer.ts` turns raw Responses events into typed message parts: text with citations, reasoning, web search, a generic tool fallback, and errors. It emits small incremental operations, which the browser applies with the same reducer.
+- **Agent loop**: a run is a multi-step loop that writes into one assistant message: model call → local tool calls → model call, until the model stops calling tools. Each model call records its own usage row, and spend limits are re-checked between steps. Admins cap steps per turn.
+- **Steering**: messages sent while a run is active are queued and injected at the next step. **Interrupt** aborts only the current model call or tool batch; **Stop** ends the run and any sub-agents it started.
 - **Live runs**: kept in memory with an event log (`src/server/agent/run-manager.ts`). `GET /api/runs/:id/stream?after=<seq>` (SSE) replays missed events, then streams live. This is how reload, resume, and reconnect work.
 - **Saving**: partial output is flushed to Postgres at most once a second, so a server restart never loses a reply. On boot, runs left `RUNNING` are marked `INTERRUPTED`.
 
 > **Single instance:** live runs are held in process memory, so run one app instance. Running several replicas behind a load balancer would need a shared event bus (for example Postgres `LISTEN/NOTIFY`), which isn't implemented.
+
+### Agent capabilities
+
+All are toggled in **Admin → Settings**.
+
+- **Bash sandbox** (`src/server/sandbox`): a [just-bash](https://github.com/vercel-labs/just-bash) in-memory shell per top-level thread (no network or real processes; optional Python via WebAssembly). Files persist as gzipped snapshots under `UPLOAD_DIR/sandboxes` and can be downloaded from the thread's Files menu.
+- **Inline UI**: the agent can put HTML in a ```` ```ui ```` fence. It's sanitized (DOMPurify allowlist; only `ui-*` classes) and styled by the kit in `src/app/inline-ui.css`.
+- **Artifacts**: versioned markdown, HTML and React documents, created only when the user asks. HTML and React run in a sandboxed iframe (opaque origin, strict CSP, no network) using a vendored runtime bundled into `public/artifact-runtime/` by `scripts/build-artifact-runtime.mjs` (runs automatically before `dev` and `build`). The Artifacts page can also generate an artifact in a new background thread.
+- **Sub-agents** (off by default): the agent can delegate tasks to child threads (`delegate_task`, `wait_tasks`, `task_status`, `task_cancel`, `subagent_capabilities`). Admins choose the allowed models and the descriptions the agent sees. While children run, the parent waits automatically, wakes to acknowledge each result, then keeps waiting. Children are nested under their parent in the sidebar and share its sandbox.
 
 ### Pricing and spend
 
@@ -150,6 +161,7 @@ tests/                       Vitest unit tests (in-memory, no DB/network)
 | --- | --- |
 | `pnpm dev` | Dev server |
 | `pnpm build` / `pnpm start` | Production build / server |
+| `pnpm build:artifact-runtime` | Rebuild the sandboxed artifact runtime in `public/artifact-runtime/` |
 | `pnpm test` | Unit tests (Vitest) |
 | `pnpm lint` / `pnpm typecheck` | ESLint / TypeScript |
 | `pnpm db:migrate` | Create and apply a migration in development |

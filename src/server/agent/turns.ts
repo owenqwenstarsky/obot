@@ -189,7 +189,7 @@ export async function launchAssistantRun(args: LaunchRunArgs) {
     usageKind: kind === "SUBAGENT" ? "SUBAGENT" : "CHAT",
     replayReasoning,
     firstStepToolChoice: args.firstStepToolChoice,
-    meta: args.meta,
+    meta: { ...args.meta, webSearch },
   });
 
   if (args.title && !thread.titleGenerated) {
