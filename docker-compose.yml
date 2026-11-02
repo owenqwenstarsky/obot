@@ -1,0 +1,55 @@
+# Obot: app + Postgres. Copy .env.example to .env and fill in the secrets first.
+#   docker compose up -d --build
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:3055:3000"
+    environment:
+      DATABASE_URL: postgresql://obot:${POSTGRES_PASSWORD:-obot}@db:5432/obot
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      CLIPROXY_BASE_URL: ${CLIPROXY_BASE_URL:-http://host.docker.internal:8317}
+      CLIPROXY_API_KEY: ${CLIPROXY_API_KEY:-}
+      UPLOAD_DIR: /app/data/uploads
+    volumes:
+      - obot-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: obot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-obot}
+      POSTGRES_DB: obot
+    volumes:
+      - obot-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obot -d obot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional: run CLIProxyAPI alongside Obot. Uncomment, provide a config.yaml with
+  # `access.api-keys`, then set CLIPROXY_BASE_URL=http://cliproxyapi:8317 for the app.
+  # cliproxyapi:
+  #   image: eceasy/cli-proxy-api:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8317:8317"
+  #   volumes:
+  #     - ./cliproxy/config.yaml:/CLIProxyAPI/config.yaml
+  #     - ./cliproxy/auths:/root/.cli-proxy-api
+
+volumes:
+  obot-data:
+  obot-db:

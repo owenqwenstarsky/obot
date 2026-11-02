@@ -1,0 +1,342 @@
+// Obot database schema.
+// Money is stored as integer micro-dollars (1 USD = 1_000_000) in BigInt columns.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum LimitMode {
+  INHERIT
+  CUSTOM
+  UNLIMITED
+}
+
+enum DefaultLimitMode {
+  LIMITED
+  UNLIMITED
+}
+
+enum UnpricedModelPolicy {
+  BLOCK_LIMITED
+  FREE
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum MessageStatus {
+  STREAMING
+  COMPLETE
+  STOPPED
+  ERROR
+}
+
+enum RunStatus {
+  RUNNING
+  COMPLETED
+  STOPPED
+  FAILED
+  INTERRUPTED
+}
+
+enum UsageKind {
+  CHAT
+  TITLE
+}
+
+// ───────────────────── Auth (Better Auth core tables) ─────────────────────
+
+model User {
+  id            String   @id
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Obot fields
+  role               Role       @default(USER)
+  status             UserStatus @default(ACTIVE)
+  limitMode          LimitMode  @default(INHERIT)
+  weeklyLimitMicros  BigInt?
+  monthlyLimitMicros BigInt?
+  webSearchDefault   Boolean?
+  defaultModelId     String?
+  defaultEffort      String?
+
+  sessions       Session[]
+  accounts       Account[]
+  threads        Thread[]
+  attachments    Attachment[]
+  runs           Run[]
+  usageRecords   UsageRecord[]
+  invitesCreated Invite[]      @relation("InviteCreatedBy")
+  invitesUsed    Invite[]      @relation("InviteUsedBy")
+  pricesCreated  ModelPrice[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ───────────────────────────── Admin ─────────────────────────────
+
+model Invite {
+  id          String    @id @default(cuid())
+  tokenHash   String    @unique
+  email       String?
+  role        Role      @default(USER)
+  note        String?
+  createdById String
+  createdBy   User      @relation("InviteCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  expiresAt   DateTime
+  usedAt      DateTime?
+  usedById    String?
+  usedBy      User?     @relation("InviteUsedBy", fields: [usedById], references: [id], onDelete: SetNull)
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("invite")
+}
+
+/// Single-row instance settings (id is always "global").
+model AppSettings {
+  id                        String              @id @default("global")
+  defaultLimitMode          DefaultLimitMode    @default(UNLIMITED)
+  defaultWeeklyLimitMicros  BigInt?
+  defaultMonthlyLimitMicros BigInt?
+  unpricedModelPolicy       UnpricedModelPolicy @default(BLOCK_LIMITED)
+  webSearchDefault          Boolean             @default(true)
+  webSearchContextSize      String              @default("medium")
+  webSearchAllowedDomains   String[]            @default([])
+  titleModelId              String?
+  titleEffort               String?
+  systemPrompt              String?
+  modelsSyncedAt            DateTime?
+  updatedAt                 DateTime            @updatedAt
+
+  @@map("app_settings")
+}
+
+model Model {
+  id                    String       @id
+  ownedBy               String?
+  enabled               Boolean      @default(false)
+  available             Boolean      @default(true)
+  displayNameOverride   String?
+  contextWindowOverride Int?
+  sortOrder             Int          @default(0)
+  lastSeenAt            DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  prices                ModelPrice[]
+
+  @@map("model")
+}
+
+/// Append-only price history. A price is active from `effectiveFrom` until a newer row supersedes it.
+model ModelPrice {
+  id                    String        @id @default(cuid())
+  modelId               String
+  model                 Model         @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  effectiveFrom         DateTime      @default(now())
+  inputPerMMicros       BigInt
+  cachedInputPerMMicros BigInt
+  cacheWritePerMMicros  BigInt?
+  outputPerMMicros      BigInt
+  webSearchPer1kMicros  BigInt        @default(0)
+  longContextThreshold  Int?
+  longContextInputMult  Float?
+  longContextOutputMult Float?
+  createdById           String?
+  createdBy             User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt             DateTime      @default(now())
+  usageRecords          UsageRecord[]
+
+  @@index([modelId, effectiveFrom])
+  @@map("model_price")
+}
+
+// ───────────────────────────── Threads ─────────────────────────────
+
+model Thread {
+  id               String        @id @default(cuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  title            String        @default("New thread")
+  titleGenerated   Boolean       @default(false)
+  pinned           Boolean       @default(false)
+  webSearchEnabled Boolean?
+  lastModelId      String?
+  lastEffort       String?
+  lastContext      Json?
+  deletedAt        DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  lastMessageAt    DateTime      @default(now())
+  messages         Message[]
+  runs             Run[]
+
+  @@index([userId, deletedAt, lastMessageAt])
+  @@map("thread")
+}
+
+model Message {
+  id           String        @id @default(cuid())
+  threadId     String
+  thread       Thread        @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role         MessageRole
+  parts        Json          @default("[]")
+  rawOutput    Json?
+  modelId      String?
+  effort       String?
+  webSearch    Boolean       @default(false)
+  status       MessageStatus @default(COMPLETE)
+  error        String?
+  responseId   String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  attachments  Attachment[]
+  runs         Run[]
+
+  @@index([threadId, createdAt])
+  @@map("message")
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  messageId String?
+  message   Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  path      String
+  fileName  String
+  mime      String
+  size      Int
+  width     Int?
+  height    Int?
+  createdAt DateTime @default(now())
+
+  @@index([messageId])
+  @@index([userId])
+  @@map("attachment")
+}
+
+model Run {
+  id                 String    @id @default(cuid())
+  threadId           String
+  thread             Thread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  assistantMessageId String?
+  assistantMessage   Message?  @relation(fields: [assistantMessageId], references: [id], onDelete: SetNull)
+  status             RunStatus @default(RUNNING)
+  error              String?
+  startedAt          DateTime  @default(now())
+  endedAt            DateTime?
+
+  @@index([threadId, status])
+  @@index([status])
+  @@map("run")
+}
+
+// ───────────────────────────── Usage ─────────────────────────────
+
+/// Append-only, permanent usage ledger. A database trigger rejects UPDATE and DELETE.
+/// Foreign keys use plain columns (no FK constraints on thread/message/run) so that
+/// deleting threads or messages never needs to touch this table.
+model UsageRecord {
+  id                String      @id @default(cuid())
+  userId            String
+  user              User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  threadId          String?
+  messageId         String?
+  runId             String?
+  kind              UsageKind   @default(CHAT)
+  modelId           String
+  effort            String?
+  inputTokens       Int         @default(0)
+  cachedInputTokens Int         @default(0)
+  cacheWriteTokens  Int         @default(0)
+  outputTokens      Int         @default(0)
+  reasoningTokens   Int         @default(0)
+  totalTokens       Int         @default(0)
+  webSearchCalls    Int         @default(0)
+  costMicros        BigInt      @default(0)
+  priced            Boolean     @default(false)
+  priceId           String?
+  price             ModelPrice? @relation(fields: [priceId], references: [id], onDelete: Restrict)
+  responseId        String?
+  note              String?
+  createdAt         DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([threadId])
+  @@index([createdAt])
+  @@map("usage_record")
+}
