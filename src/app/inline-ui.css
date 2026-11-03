@@ -1,0 +1,259 @@
+/*
+ * Obot inline UI kit: styles for model-authored ```ui blocks in chat messages.
+ * Everything is scoped under .obot-ui and built from the app's theme tokens, so blocks
+ * follow light/dark mode automatically. Only classes starting with "ui-" survive
+ * sanitization; keep this file the single source of truth for what the model may use
+ * (documented in src/server/agent/system-prompt.ts).
+ */
+
+.obot-ui {
+  --ui-gap: 0.75rem;
+  --ui-radius: var(--radius);
+  --tone: var(--primary);
+  margin: 0.25rem 0;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+/* Tones (data-tone="info|success|warning|danger|neutral|accent") */
+.obot-ui [data-tone="info"] { --tone: #2a78d6; }
+.obot-ui [data-tone="success"] { --tone: #16a06d; }
+.obot-ui [data-tone="warning"] { --tone: #d48c00; }
+.obot-ui [data-tone="danger"] { --tone: var(--destructive); }
+.obot-ui [data-tone="neutral"] { --tone: var(--muted-foreground); }
+.obot-ui [data-tone="accent"] { --tone: var(--primary); }
+.dark .obot-ui [data-tone="info"] { --tone: #6aa6ee; }
+.dark .obot-ui [data-tone="success"] { --tone: #3ccf95; }
+.dark .obot-ui [data-tone="warning"] { --tone: #f0b43c; }
+
+.obot-ui > * + * { margin-top: var(--ui-gap); }
+.obot-ui p { margin: 0; }
+.obot-ui p + p { margin-top: 0.5rem; }
+.obot-ui h3, .obot-ui h4, .obot-ui h5, .obot-ui h6 { margin: 0; font-weight: 600; line-height: 1.3; }
+.obot-ui h3 { font-size: 1.05rem; }
+.obot-ui h4 { font-size: 0.975rem; }
+.obot-ui h5, .obot-ui h6 { font-size: 0.875rem; }
+.obot-ui ul, .obot-ui ol { margin: 0; padding-left: 1.25rem; }
+.obot-ui ul { list-style: disc; }
+.obot-ui ol { list-style: decimal; }
+.obot-ui li + li { margin-top: 0.25rem; }
+.obot-ui a { color: var(--primary); font-weight: 500; text-underline-offset: 3px; }
+.obot-ui a:hover { text-decoration: underline; }
+.obot-ui code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  background: var(--muted);
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.3rem;
+}
+.obot-ui pre {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  background: var(--muted);
+  border-radius: calc(var(--ui-radius) * 0.8);
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0;
+}
+.obot-ui pre code { background: none; padding: 0; }
+.obot-ui hr, .obot-ui .ui-divider { border: 0; border-top: 1px solid var(--border); margin: var(--ui-gap) 0; }
+.obot-ui blockquote { margin: 0; padding-left: 0.875rem; border-left: 3px solid var(--border); color: var(--muted-foreground); }
+.obot-ui strong { font-weight: 600; }
+
+/* Layout */
+.obot-ui .ui-stack { display: flex; flex-direction: column; gap: var(--ui-gap); }
+.obot-ui .ui-stack > * + * { margin-top: 0; }
+.obot-ui .ui-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.obot-ui .ui-row > * + * { margin-top: 0; }
+.obot-ui .ui-grid { display: grid; gap: var(--ui-gap); grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.obot-ui .ui-grid > * + * { margin-top: 0; }
+.obot-ui .ui-grid[data-cols="1"] { grid-template-columns: minmax(0, 1fr); }
+.obot-ui .ui-grid[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.obot-ui .ui-grid[data-cols="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 640px) {
+  .obot-ui .ui-grid, .obot-ui .ui-grid[data-cols] { grid-template-columns: minmax(0, 1fr); }
+  .obot-ui .ui-grid[data-cols="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.obot-ui .ui-muted { color: var(--muted-foreground); font-size: 0.875rem; }
+.obot-ui .ui-small { font-size: 0.8125rem; }
+.obot-ui .ui-center { text-align: center; }
+
+/* Card */
+.obot-ui .ui-card {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--card-foreground);
+  border-radius: var(--ui-radius);
+  padding: 0.875rem 1rem;
+  box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 5%, transparent);
+}
+.obot-ui .ui-card[data-tone] { border-color: color-mix(in oklch, var(--tone) 35%, var(--border)); }
+.obot-ui .ui-card > * + * { margin-top: 0.5rem; }
+.obot-ui .ui-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+.obot-ui .ui-card-header > * + * { margin-top: 0; }
+.obot-ui .ui-card-title { font-weight: 600; font-size: 0.975rem; line-height: 1.35; display: flex; align-items: center; gap: 0.4rem; }
+.obot-ui .ui-card-desc { color: var(--muted-foreground); font-size: 0.8125rem; }
+.obot-ui .ui-card-footer {
+  margin-top: 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
+/* Callout */
+.obot-ui .ui-callout {
+  --tone: #2a78d6;
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+  border: 1px solid color-mix(in oklch, var(--tone) 35%, transparent);
+  background: color-mix(in oklch, var(--tone) 9%, transparent);
+  border-radius: var(--ui-radius);
+  padding: 0.7rem 0.875rem;
+}
+.dark .obot-ui .ui-callout:not([data-tone]) { --tone: #6aa6ee; }
+.obot-ui .ui-callout > * + * { margin-top: 0; }
+.obot-ui .ui-callout > .ui-icon { color: var(--tone); margin-top: 0.15rem; }
+.obot-ui .ui-callout-title { font-weight: 600; }
+
+/* Badge / pills */
+.obot-ui .ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: color-mix(in oklch, var(--tone) 85%, var(--foreground));
+  background: color-mix(in oklch, var(--tone) 13%, transparent);
+  border: 1px solid color-mix(in oklch, var(--tone) 25%, transparent);
+}
+.obot-ui .ui-badge:not([data-tone]) { --tone: var(--muted-foreground); }
+.obot-ui .ui-pill-list { display: flex; flex-wrap: wrap; gap: 0.375rem; list-style: none; padding: 0; }
+.obot-ui .ui-pill-list > li { margin: 0; }
+.obot-ui .ui-pill-list > li, .obot-ui .ui-pill {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.65rem;
+  font-size: 0.8125rem;
+  background: var(--muted);
+}
+.obot-ui .ui-kbd, .obot-ui kbd {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 0.35rem;
+  padding: 0.05rem 0.35rem;
+  background: var(--card);
+}
+
+/* Stat */
+.obot-ui .ui-stat {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: var(--ui-radius);
+  padding: 0.75rem 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.obot-ui .ui-stat > * + * { margin-top: 0; }
+.obot-ui .ui-stat-label { font-size: 0.75rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.04em; }
+.obot-ui .ui-stat-value { font-size: 1.5rem; font-weight: 650; letter-spacing: -0.01em; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.obot-ui .ui-stat-delta { font-size: 0.8125rem; font-weight: 500; color: var(--muted-foreground); }
+.obot-ui .ui-stat-delta[data-tone] { color: var(--tone); }
+
+/* Key/value list */
+.obot-ui .ui-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 1rem; margin: 0; }
+.obot-ui .ui-kv > * + * { margin-top: 0; }
+.obot-ui .ui-kv dt { color: var(--muted-foreground); font-size: 0.875rem; }
+.obot-ui .ui-kv dd { margin: 0; font-weight: 500; }
+
+/* Steps */
+.obot-ui .ui-steps { list-style: none; padding: 0; counter-reset: ui-step; display: flex; flex-direction: column; gap: 0.625rem; }
+.obot-ui .ui-steps > li, .obot-ui .ui-step { margin: 0; position: relative; padding-left: 2.25rem; counter-increment: ui-step; min-height: 1.6rem; }
+.obot-ui .ui-steps > li::before, .obot-ui .ui-step::before {
+  content: counter(ui-step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+.obot-ui .ui-step[data-tone]::before { background: var(--tone); }
+.obot-ui .ui-step[data-state="done"]::before { content: "✓"; background: #16a06d; }
+.obot-ui .ui-step[data-state="todo"]::before { background: var(--muted); color: var(--muted-foreground); }
+
+/* Timeline */
+.obot-ui .ui-timeline { list-style: none; padding: 0 0 0 1rem; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 0.875rem; margin-left: 0.375rem; }
+.obot-ui .ui-timeline > li { margin: 0; position: relative; }
+.obot-ui .ui-timeline > li::before {
+  content: "";
+  position: absolute;
+  left: calc(-1rem - 6px);
+  top: 0.45rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--tone);
+  box-shadow: 0 0 0 3px var(--background);
+}
+.obot-ui .ui-timeline-time { font-size: 0.75rem; color: var(--muted-foreground); }
+
+/* Table */
+.obot-ui .ui-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--ui-radius); }
+.obot-ui table, .obot-ui .ui-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.obot-ui .ui-table:not(.ui-table-wrap *) { border: 1px solid var(--border); border-radius: var(--ui-radius); overflow: hidden; }
+.obot-ui th { text-align: left; font-weight: 600; background: var(--muted); color: var(--foreground); }
+.obot-ui th, .obot-ui td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.obot-ui tr:last-child td { border-bottom: 0; }
+.obot-ui td[data-align="right"], .obot-ui th[data-align="right"] { text-align: right; font-variant-numeric: tabular-nums; }
+.obot-ui td[data-tone] { color: var(--tone); font-weight: 500; }
+
+/* Progress / meter */
+.obot-ui progress, .obot-ui meter, .obot-ui .ui-progress {
+  appearance: none;
+  width: 100%;
+  height: 0.5rem;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--muted);
+  display: block;
+}
+.obot-ui progress::-webkit-progress-bar { background: var(--muted); border-radius: 999px; }
+.obot-ui progress::-webkit-progress-value { background: var(--tone); border-radius: 999px; }
+.obot-ui progress::-moz-progress-bar { background: var(--tone); border-radius: 999px; }
+.obot-ui meter::-webkit-meter-bar { background: var(--muted); border: 0; border-radius: 999px; }
+.obot-ui meter::-webkit-meter-optimum-value { background: var(--tone); border-radius: 999px; }
+.obot-ui meter::-moz-meter-bar { background: var(--tone); border-radius: 999px; }
+.obot-ui .ui-progress-label { display: flex; justify-content: space-between; font-size: 0.8125rem; color: var(--muted-foreground); margin-bottom: 0.3rem; }
+
+/* Details */
+.obot-ui details { border: 1px solid var(--border); border-radius: var(--ui-radius); padding: 0.5rem 0.875rem; background: var(--card); }
+.obot-ui details > summary { cursor: pointer; font-weight: 500; list-style-position: inside; }
+.obot-ui details[open] > summary { margin-bottom: 0.5rem; }
+
+/* Compare columns */
+.obot-ui .ui-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--ui-gap); }
+.obot-ui .ui-compare > * + * { margin-top: 0; }
+@media (max-width: 640px) { .obot-ui .ui-compare { grid-template-columns: minmax(0, 1fr); } }
+
+/* Icons */
+.obot-ui .ui-icon { display: inline-block; width: 1em; height: 1em; flex-shrink: 0; vertical-align: -0.125em; }
+.obot-ui .ui-icon[data-size="lg"] { width: 1.25rem; height: 1.25rem; }
+.obot-ui .ui-icon[data-tone] { color: var(--tone); }

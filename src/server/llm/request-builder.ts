@@ -3,12 +3,35 @@
  * resolved by the caller and passed in as data URLs.
  */
 import type { MessagePart } from "@/lib/parts";
-import { partsToText } from "@/lib/parts";
 import type { AllowedEffort } from "@/lib/efforts";
+import {
+  isStoredTranscript,
+  replayTranscript,
+  type InputContent,
+  type InputItem,
+} from "@/server/llm/transcript";
+
+export type { InputContent, InputItem } from "@/server/llm/transcript";
 
 export type HistoryMessage = {
   role: "USER" | "ASSISTANT";
   parts: MessagePart[];
+  /** Message.rawOutput; replayed when it is a v2 transcript. */
+  transcript?: unknown;
+};
+
+export type FunctionToolSpec = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  strict: false;
+};
+
+export type WebSearchToolSpec = {
+  type: "web_search";
+  search_context_size: "low" | "medium" | "high";
+  filters?: { allowed_domains: string[] };
 };
 
 export type ImageResolver = (attachmentId: string) => string | null;
@@ -27,26 +50,18 @@ export type BuildRequestArgs = {
   webSearch: WebSearchConfig;
   systemPrompt?: string | null;
   supportsReasoning: boolean;
+  /** Request encrypted reasoning so it can be replayed between tool calls (store: false). */
+  replayReasoning?: boolean;
 };
-
-export type InputContent =
-  | { type: "input_text"; text: string }
-  | { type: "input_image"; image_url: string; detail: "auto" };
-
-export type InputItem =
-  | { role: "user"; content: InputContent[] }
-  | { role: "assistant"; content: string };
 
 export type ResponsesRequestBody = {
   model: string;
   input: InputItem[];
   instructions?: string;
   reasoning?: { effort: AllowedEffort; summary?: "auto" };
-  tools?: Array<{
-    type: "web_search";
-    search_context_size: "low" | "medium" | "high";
-    filters?: { allowed_domains: string[] };
-  }>;
+  tools?: Array<WebSearchToolSpec | FunctionToolSpec>;
+  tool_choice?: "auto" | "required" | { type: "function"; name: string };
+  parallel_tool_calls?: boolean;
   include?: string[];
   stream: true;
   store: false;
@@ -66,12 +81,33 @@ export function buildInput(history: HistoryMessage[], resolveImage: ImageResolve
         }
       }
       if (content.length > 0) items.push({ role: "user", content });
+    } else if (isStoredTranscript(msg.transcript)) {
+      items.push(...replayTranscript(msg.transcript.items, { pastTurn: true }));
     } else {
-      const text = partsToText(msg.parts).trim();
-      if (text) items.push({ role: "assistant", content: text });
+      items.push(...legacyAssistantItems(msg.parts));
     }
   }
   return items;
+}
+
+/** Text-only replay of an assistant message (legacy rows); steering parts become user items. */
+function legacyAssistantItems(parts: MessagePart[]): InputItem[] {
+  const out: InputItem[] = [];
+  let buf: string[] = [];
+  const flush = () => {
+    const text = buf.join("\n\n").trim();
+    if (text) out.push({ role: "assistant", content: text });
+    buf = [];
+  };
+  for (const p of parts) {
+    if (p.type === "text" && p.text.trim()) buf.push(p.text);
+    else if (p.type === "steer") {
+      flush();
+      out.push({ role: "user", content: [{ type: "input_text", text: p.text }] });
+    }
+  }
+  flush();
+  return out;
 }
 
 /** Normalize admin-entered domains: strip protocol, path, and whitespace; dedupe. */
@@ -112,6 +148,9 @@ export function buildResponsesRequest(args: BuildRequestArgs): ResponsesRequestB
       },
     ];
     body.include = ["web_search_call.action.sources"];
+  }
+  if (args.replayReasoning && args.supportsReasoning && args.effort && args.effort !== "none") {
+    body.include = [...(body.include ?? []), "reasoning.encrypted_content"];
   }
   return body;
 }

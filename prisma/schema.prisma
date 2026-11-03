@@ -61,6 +61,32 @@ enum RunStatus {
 enum UsageKind {
   CHAT
   TITLE
+  SUBAGENT
+}
+
+enum ArtifactKind {
+  MARKDOWN
+  HTML
+  REACT
+}
+
+enum ArtifactStatus {
+  GENERATING
+  READY
+  FAILED
+}
+
+enum ThreadKind {
+  CHAT
+  SUBAGENT
+}
+
+enum SubagentTaskStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  INTERRUPTED
 }
 
 // ───────────────────── Auth (Better Auth core tables) ─────────────────────
@@ -90,6 +116,7 @@ model User {
   attachments    Attachment[]
   runs           Run[]
   usageRecords   UsageRecord[]
+  artifacts      Artifact[]
   invitesCreated Invite[]      @relation("InviteCreatedBy")
   invitesUsed    Invite[]      @relation("InviteUsedBy")
   pricesCreated  ModelPrice[]
@@ -178,6 +205,14 @@ model AppSettings {
   titleEffort               String?
   systemPrompt              String?
   modelsSyncedAt            DateTime?
+  agentMaxSteps             Int                 @default(50)
+  sandboxEnabled            Boolean             @default(true)
+  sandboxPythonEnabled      Boolean             @default(true)
+  artifactsEnabled          Boolean             @default(true)
+  inlineUiEnabled           Boolean             @default(true)
+  subagentsEnabled          Boolean             @default(false)
+  subagentMaxConcurrent     Int                 @default(4)
+  subagentMaxSteps          Int                 @default(30)
   updatedAt                 DateTime            @updatedAt
 
   @@map("app_settings")
@@ -195,6 +230,7 @@ model Model {
   createdAt             DateTime     @default(now())
   updatedAt             DateTime     @updatedAt
   prices                ModelPrice[]
+  subagentModel         SubagentModel?
 
   @@map("model")
 }
@@ -239,10 +275,18 @@ model Thread {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
   lastMessageAt    DateTime      @default(now())
+  kind             ThreadKind    @default(CHAT)
+  parentThreadId   String?
+  parentThread     Thread?       @relation("ThreadChildren", fields: [parentThreadId], references: [id], onDelete: Cascade)
+  children         Thread[]      @relation("ThreadChildren")
   messages         Message[]
   runs             Run[]
+  spawnedTasks     SubagentTask[] @relation("TaskParent")
+  task             SubagentTask?  @relation("TaskChild")
+  artifacts        Artifact[]
 
   @@index([userId, deletedAt, lastMessageAt])
+  @@index([parentThreadId])
   @@map("thread")
 }
 
@@ -263,6 +307,7 @@ model Message {
   updatedAt    DateTime      @updatedAt
   attachments  Attachment[]
   runs         Run[]
+  spawnedTasks SubagentTask[]
 
   @@index([threadId, createdAt])
   @@map("message")
@@ -297,12 +342,60 @@ model Run {
   assistantMessage   Message?  @relation(fields: [assistantMessageId], references: [id], onDelete: SetNull)
   status             RunStatus @default(RUNNING)
   error              String?
+  kind               ThreadKind @default(CHAT)
+  parentRunId        String?
+  steps              Int       @default(0)
   startedAt          DateTime  @default(now())
   endedAt            DateTime?
 
   @@index([threadId, status])
   @@index([status])
+  @@index([parentRunId])
   @@map("run")
+}
+
+// ───────────────────────────── Sub-agents ─────────────────────────────
+
+/// Admin allowlist of models sub-agents may run on. Descriptions are shown to the orchestrating model.
+model SubagentModel {
+  modelId       String   @id
+  model         Model    @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  description   String?
+  defaultEffort String?
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@map("subagent_model")
+}
+
+/// A delegated sub-agent task: one child thread driven by a parent run.
+model SubagentTask {
+  id              String             @id @default(cuid())
+  userId          String
+  parentThreadId  String
+  parentThread    Thread             @relation("TaskParent", fields: [parentThreadId], references: [id], onDelete: Cascade)
+  parentRunId     String
+  parentMessageId String?
+  parentMessage   Message?           @relation(fields: [parentMessageId], references: [id], onDelete: SetNull)
+  callId          String
+  childThreadId   String             @unique
+  childThread     Thread             @relation("TaskChild", fields: [childThreadId], references: [id], onDelete: Cascade)
+  childRunId      String?
+  title           String
+  prompt          String
+  modelId         String
+  effort          String?
+  status          SubagentTaskStatus @default(RUNNING)
+  result          String?
+  error           String?
+  notifiedAt      DateTime?
+  createdAt       DateTime           @default(now())
+  endedAt         DateTime?
+
+  @@index([parentRunId, status])
+  @@index([parentThreadId])
+  @@index([status])
+  @@map("subagent_task")
 }
 
 // ───────────────────────────── Usage ─────────────────────────────
@@ -333,10 +426,52 @@ model UsageRecord {
   price             ModelPrice? @relation(fields: [priceId], references: [id], onDelete: Restrict)
   responseId        String?
   note              String?
+  stepIndex         Int?
+  rootThreadId      String?
   createdAt         DateTime    @default(now())
 
   @@index([userId, createdAt])
   @@index([threadId])
+  @@index([rootThreadId])
   @@index([createdAt])
   @@map("usage_record")
+}
+
+// ───────────────────────────── Artifacts ─────────────────────────────
+
+/// A saved document/app the agent created on request. Every update adds a version.
+model Artifact {
+  id             String            @id @default(cuid())
+  userId         String
+  user           User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  threadId       String
+  thread         Thread            @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  title          String
+  kind           ArtifactKind
+  status         ArtifactStatus    @default(READY)
+  currentVersion Int               @default(0)
+  runId          String?
+  error          String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  deletedAt      DateTime?
+  versions       ArtifactVersion[]
+
+  @@index([userId, deletedAt, updatedAt])
+  @@index([threadId])
+  @@map("artifact")
+}
+
+model ArtifactVersion {
+  id         String   @id @default(cuid())
+  artifactId String
+  artifact   Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  version    Int
+  title      String
+  content    String
+  messageId  String?
+  createdAt  DateTime @default(now())
+
+  @@unique([artifactId, version])
+  @@map("artifact_version")
 }

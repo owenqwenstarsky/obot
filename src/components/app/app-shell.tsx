@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/app/sidebar";
 import { UserContext, type ShellUser } from "@/components/app/user-context";
+import { SidebarCollapsedContext } from "@/components/app/sidebar-state";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -98,7 +99,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
               <TooltipContent side="bottom">New thread</TooltipContent>
             </Tooltip>
           </div>
-          {children}
+          <SidebarCollapsedContext value={collapsed}>{children}</SidebarCollapsedContext>
         </main>
       </div>
     </UserContext>

@@ -7,8 +7,9 @@ import type { TextPart } from "@/lib/parts";
 import { canonicalUrl, injectCitationLinks, stripCitationParens, uniqueSources } from "@/lib/citations";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Favicon, domainOf } from "./favicon";
+import { InlineUiRenderer } from "../inline-ui/inline-ui";
 
-const plugins = { code };
+const plugins = { code, renderers: [{ language: "ui", component: InlineUiRenderer }] };
 
 function CitationChip({ href, title, index }: { href: string; title?: string; index: number }) {
   return (

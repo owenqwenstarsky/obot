@@ -3,13 +3,14 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeft, Search, SquarePen, X } from "lucide-react";
+import { PanelLeft, Search, Shapes, SquarePen, X } from "lucide-react";
 import { useThreads } from "@/hooks/queries";
 import { groupThreads } from "@/lib/thread-groups";
 import { ThreadItem } from "@/components/app/thread-item";
 import { UserMenu } from "@/components/app/user-menu";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 export function Sidebar({ onCollapse, onNavigate }: { onCollapse: () => void; onNavigate?: () => void }) {
   const pathname = usePathname();
@@ -46,6 +47,18 @@ export function Sidebar({ onCollapse, onNavigate }: { onCollapse: () => void; on
             New Thread
           </Link>
         </Button>
+        <Link
+          href="/artifacts"
+          className={cn(
+            "flex h-8 items-center gap-2 rounded-md px-2.5 text-sm transition-colors",
+            pathname.startsWith("/artifacts")
+              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60",
+          )}
+        >
+          <Shapes className="size-4" />
+          Artifacts
+        </Link>
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -84,7 +97,7 @@ export function Sidebar({ onCollapse, onNavigate }: { onCollapse: () => void; on
             <div className="px-2 pt-2 pb-1 text-xs font-medium text-primary/90">{g.label}</div>
             <ul className="space-y-0.5">
               {g.items.map((t) => (
-                <ThreadItem key={t.id} thread={t} active={t.id === activeId} />
+                <ThreadItem key={t.id} thread={t} active={t.id === activeId} activeId={activeId} />
               ))}
             </ul>
           </div>

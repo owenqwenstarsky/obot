@@ -228,7 +228,7 @@ export function UsageDashboard({
                     {r.effort && <span className="ml-1.5 text-xs text-muted-foreground">{effortLabel(r.effort)}</span>}
                   </TableCell>
                   <TableCell>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{r.kind === "TITLE" ? "Title" : "Chat"}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{r.kind === "TITLE" ? "Title" : r.kind === "SUBAGENT" ? "Sub-agent" : "Chat"}</span>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{r.inputTokens.toLocaleString()}</TableCell>
                   <TableCell className="text-right tabular-nums">{r.outputTokens.toLocaleString()}</TableCell>

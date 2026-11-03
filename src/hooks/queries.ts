@@ -2,10 +2,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { ClientThread } from "@/server/agent/serialize";
+import type { ThreadListEntry } from "@/server/agent/serialize";
 import type { CatalogModel } from "@/server/llm/catalog";
 
-export type ThreadListItem = ClientThread & { running: boolean };
+export type ThreadListItem = ThreadListEntry;
 
 export function useThreads() {
   return useQuery({

@@ -27,6 +27,11 @@ type Settings = {
   titleModelId: string | null;
   titleEffort: string | null;
   systemPrompt: string | null;
+  agentMaxSteps: number;
+  sandboxEnabled: boolean;
+  sandboxPythonEnabled: boolean;
+  inlineUiEnabled: boolean;
+  artifactsEnabled: boolean;
 };
 
 type Form = {
@@ -40,6 +45,11 @@ type Form = {
   titleModelId: string;
   titleEffort: string;
   systemPrompt: string;
+  agentMaxSteps: string;
+  sandboxEnabled: boolean;
+  sandboxPythonEnabled: boolean;
+  inlineUiEnabled: boolean;
+  artifactsEnabled: boolean;
 };
 
 function toForm(s: Settings): Form {
@@ -54,8 +64,15 @@ function toForm(s: Settings): Form {
     titleModelId: s.titleModelId ?? "__auto",
     titleEffort: s.titleEffort ?? "__auto",
     systemPrompt: s.systemPrompt ?? "",
+    agentMaxSteps: String(s.agentMaxSteps),
+    sandboxEnabled: s.sandboxEnabled,
+    sandboxPythonEnabled: s.sandboxPythonEnabled,
+    inlineUiEnabled: s.inlineUiEnabled,
+    artifactsEnabled: s.artifactsEnabled,
   };
 }
+
+const intIn = (v: string, min: number, max: number) => /^\d+$/.test(v.trim()) && Number(v) >= min && Number(v) <= max;
 
 export function AdminSettings() {
   const qc = useQueryClient();
@@ -71,7 +88,8 @@ export function AdminSettings() {
   const money = (v: string) => (v.trim() === "" ? null : Number(v));
   const invalid =
     !form ||
-    [form.weekly, form.monthly].some((v) => v.trim() !== "" && (!Number.isFinite(Number(v)) || Number(v) < 0));
+    [form.weekly, form.monthly].some((v) => v.trim() !== "" && (!Number.isFinite(Number(v)) || Number(v) < 0)) ||
+    !intIn(form.agentMaxSteps, 1, 200);
 
   const save = useMutation({
     mutationFn: () => {
@@ -89,6 +107,11 @@ export function AdminSettings() {
           titleModelId: f.titleModelId === "__auto" ? null : f.titleModelId,
           titleEffort: f.titleEffort === "__auto" ? null : f.titleEffort,
           systemPrompt: f.systemPrompt.trim() || null,
+          agentMaxSteps: Number(f.agentMaxSteps),
+          sandboxEnabled: f.sandboxEnabled,
+          sandboxPythonEnabled: f.sandboxPythonEnabled,
+          inlineUiEnabled: f.inlineUiEnabled,
+          artifactsEnabled: f.artifactsEnabled,
         },
       });
     },
@@ -238,6 +261,65 @@ export function AdminSettings() {
               placeholder="Instructions sent with every agent request, e.g. tone or formatting preferences."
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Capabilities</CardTitle>
+          <CardDescription>Local tools the agent can use. Changes apply to new turns.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Max steps per turn</Label>
+            <Input
+              className="w-32"
+              inputMode="numeric"
+              value={form.agentMaxSteps}
+              onChange={(e) => set("agentMaxSteps", e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Each model call counts as a step (1–200). Stops runaway tool loops.</p>
+          </div>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Inline UI in replies</span>
+              <span className="block text-xs text-muted-foreground">
+                Lets the agent render cards, stats, callouts and tables in chat using the built-in UI kit (sanitized, no scripts).
+              </span>
+            </span>
+            <Switch checked={form.inlineUiEnabled} onCheckedChange={(v) => set("inlineUiEnabled", v)} />
+          </label>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Artifacts</span>
+              <span className="block text-xs text-muted-foreground">
+                Saved markdown documents, HTML pages and React apps, created when people ask. React and HTML run in a sandboxed frame with no network.
+              </span>
+            </span>
+            <Switch checked={form.artifactsEnabled} onCheckedChange={(v) => set("artifactsEnabled", v)} />
+          </label>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Bash sandbox</span>
+              <span className="block text-xs text-muted-foreground">
+                A lightweight in-memory shell per thread (just-bash). No network; files persist per thread.
+              </span>
+            </span>
+            <Switch checked={form.sandboxEnabled} onCheckedChange={(v) => set("sandboxEnabled", v)} />
+          </label>
+          <label className="flex items-center justify-between gap-4 pl-4 text-sm">
+            <span>
+              <span className="font-medium">Python in the sandbox</span>
+              <span className="block text-xs text-muted-foreground">
+                CPython compiled to WebAssembly. Its memory use isn&apos;t capped, so turn this off on small servers.
+              </span>
+            </span>
+            <Switch
+              checked={form.sandboxPythonEnabled}
+              disabled={!form.sandboxEnabled}
+              onCheckedChange={(v) => set("sandboxPythonEnabled", v)}
+            />
+          </label>
         </CardContent>
       </Card>
 

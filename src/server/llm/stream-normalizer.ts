@@ -7,6 +7,7 @@
  */
 import type {
   Citation,
+  FunctionToolPart,
   GenericToolPart,
   MessagePart,
   ReasoningPart,
@@ -34,6 +35,25 @@ export type NormalizerSnapshot = {
   incompleteReason: string | null;
   /** Billable web searches: web_search_call items whose action is a `search`. */
   webSearchCalls: number;
+  /** Completed function calls from this response, in output order. */
+  functionCalls: PendingFunctionCall[];
+  /** Index of the first part created by this normalizer (parts before it belong to earlier steps). */
+  stepPartStart: number;
+};
+
+export type PendingFunctionCall = {
+  itemId: string;
+  callId: string;
+  name: string;
+  arguments: string;
+  partIndex: number;
+};
+
+export type NormalizerOptions = {
+  /** Shared parts array (multi-step runs). New parts are appended; earlier parts are never touched. */
+  parts?: MessagePart[];
+  /** Prefix for part ids so ids stay unique across steps. */
+  idPrefix?: string;
 };
 
 const WEB_STATUSES: WebSearchStatus[] = ["in_progress", "searching", "completed", "failed", "incomplete"];
@@ -106,7 +126,10 @@ function parseCitation(raw: unknown): Citation | null {
 }
 
 export class ResponseStreamNormalizer {
-  private parts: MessagePart[] = [];
+  private parts: MessagePart[];
+  private readonly idPrefix: string;
+  private readonly stepPartStart: number;
+  private functionCalls = new Map<string, PendingFunctionCall>();
   private indexByItemId = new Map<string, number>();
   private summaryIndexByItem = new Map<string, number>();
   private rawOutput: unknown[] = [];
@@ -117,7 +140,14 @@ export class ResponseStreamNormalizer {
   private incompleteReason: string | null = null;
   private countedSearchItems = new Set<string>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    opts: NormalizerOptions = {},
+  ) {
+    this.parts = opts.parts ?? [];
+    this.idPrefix = opts.idPrefix ?? "";
+    this.stepPartStart = this.parts.length;
+  }
 
   snapshot(): NormalizerSnapshot {
     return {
@@ -129,6 +159,8 @@ export class ResponseStreamNormalizer {
       error: this.error,
       incompleteReason: this.incompleteReason,
       webSearchCalls: this.countedSearchItems.size,
+      functionCalls: [...this.functionCalls.values()],
+      stepPartStart: this.stepPartStart,
     };
   }
 
@@ -142,17 +174,24 @@ export class ResponseStreamNormalizer {
     }
   }
 
-  /** Mark any open reasoning/tool parts as finished (used on stop/failure). */
+  /**
+   * Mark any open reasoning/tool parts from this step as finished (called when the stream ends).
+   * Function calls whose arguments never finished streaming are cancelled; completed calls
+   * (`pending`) are left for the caller to execute or cancel.
+   */
   finalizeOpenParts(): PartOp[] {
     const ops: PartOp[] = [];
     const t = this.now();
-    this.parts.forEach((p, index) => {
+    for (let index = this.stepPartStart; index < this.parts.length; index++) {
+      const p = this.parts[index];
       if (p.type === "reasoning" && p.endedAt == null) {
         ops.push(this.set(index, { ...p, endedAt: t }));
       } else if (p.type === "tool" && p.tool === "web_search" && (p.status === "in_progress" || p.status === "searching")) {
         ops.push(this.set(index, { ...p, status: "incomplete", endedAt: t }));
+      } else if (p.type === "tool" && p.tool === "function" && p.status === "streaming_args") {
+        ops.push(this.set(index, { ...p, status: "cancelled", endedAt: t }));
       }
-    });
+    }
     return ops;
   }
 
@@ -161,8 +200,9 @@ export class ResponseStreamNormalizer {
     return { op: "upsert", index, part };
   }
 
-  private add(itemId: string, part: MessagePart): { index: number; op: PartOp } {
+  private add(itemId: string, raw: MessagePart): { index: number; op: PartOp } {
     const index = this.parts.length;
+    const part = this.idPrefix ? ({ ...raw, id: `${this.idPrefix}${raw.id}` } as MessagePart) : raw;
     this.parts.push(part);
     this.indexByItemId.set(itemId, index);
     return { index, op: { op: "upsert", index, part } };
@@ -171,9 +211,10 @@ export class ResponseStreamNormalizer {
   private closeOpenReasoning(): PartOp[] {
     const ops: PartOp[] = [];
     const t = this.now();
-    this.parts.forEach((p, index) => {
+    for (let index = this.stepPartStart; index < this.parts.length; index++) {
+      const p = this.parts[index];
       if (p.type === "reasoning" && p.endedAt == null) ops.push(this.set(index, { ...p, endedAt: t }));
-    });
+    }
     return ops;
   }
 
@@ -296,6 +337,27 @@ export class ResponseStreamNormalizer {
         return ops;
       }
 
+      case "response.function_call_arguments.delta": {
+        const itemId = str(event.item_id);
+        const delta = str(event.delta);
+        if (!itemId || !delta) return [];
+        const index = this.indexByItemId.get(itemId);
+        const part = index != null ? this.parts[index] : undefined;
+        if (index == null || part?.type !== "tool" || part.tool !== "function") return [];
+        this.parts[index] = { ...part, argsText: part.argsText + delta };
+        return [{ op: "append_args", index, delta }];
+      }
+
+      case "response.function_call_arguments.done": {
+        const itemId = str(event.item_id);
+        const args = str(event.arguments);
+        if (!itemId || args == null) return [];
+        const index = this.indexByItemId.get(itemId);
+        const part = index != null ? this.parts[index] : undefined;
+        if (index == null || part?.type !== "tool" || part.tool !== "function" || part.argsText === args) return [];
+        return [this.set(index, { ...part, argsText: args })];
+      }
+
       case "response.completed":
       case "response.incomplete":
       case "response.failed": {
@@ -354,7 +416,7 @@ export class ResponseStreamNormalizer {
 
   private onItemAdded(item: Json | undefined): PartOp[] {
     if (!item) return [];
-    const id = str(item.id) ?? `item_${this.parts.length}`;
+    const id = str(item.id) ?? str(item.call_id) ?? `item_${this.parts.length}`;
     if (this.indexByItemId.has(id)) return [];
     const type = str(item.type) ?? "unknown";
     const ops: PartOp[] = [];
@@ -370,6 +432,20 @@ export class ResponseStreamNormalizer {
       case "reasoning": {
         const { created } = this.ensureReasoning(id);
         if (created) ops.push(created);
+        break;
+      }
+      case "function_call": {
+        const part: FunctionToolPart = {
+          type: "tool",
+          tool: "function",
+          id,
+          callId: str(item.call_id) ?? id,
+          name: str(item.name) ?? "unknown",
+          status: "streaming_args",
+          argsText: str(item.arguments) ?? "",
+          startedAt: this.now(),
+        };
+        ops.push(this.add(id, part).op);
         break;
       }
       case "web_search_call": {
@@ -396,7 +472,7 @@ export class ResponseStreamNormalizer {
   private onItemDone(item: Json | undefined): PartOp[] {
     if (!item) return [];
     this.rawOutput.push(item);
-    const id = str(item.id);
+    const id = str(item.id) ?? str(item.call_id);
     const type = str(item.type) ?? "unknown";
     if (!id) return [];
     let index = this.indexByItemId.get(id);
@@ -451,6 +527,14 @@ export class ResponseStreamNormalizer {
       };
       if ((action?.kind ?? part.actions[0]?.kind) === "search") this.countedSearchItems.add(id);
       ops.push(this.set(index, next));
+    } else if (type === "function_call" && part?.type === "tool" && part.tool === "function") {
+      const args = str(item.arguments) ?? part.argsText;
+      const callId = str(item.call_id) ?? part.callId;
+      const name = str(item.name) ?? part.name;
+      ops.push(this.set(index, { ...part, status: "pending", argsText: args, callId, name }));
+      if (!this.functionCalls.has(id)) {
+        this.functionCalls.set(id, { itemId: id, callId, name, arguments: args, partIndex: index });
+      }
     } else if (part?.type === "tool" && part.tool === "generic") {
       ops.push(this.set(index, { ...part, status: str(item.status) ?? "completed", raw: item }));
     }

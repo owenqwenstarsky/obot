@@ -42,12 +42,12 @@ function setup() {
   let t = 0;
   const manager = new RunManager({
     openStream: async (_body, signal) => upstream.iterable(signal),
-    saveParts: async (_id, parts) => {
+    saveProgress: async (_id, parts) => {
       saved.push(parts);
     },
+    recordStep: async () => ({ costMicros: 1234 }),
     finish: async (r) => {
       finished.push(r);
-      return { costMicros: 1234 };
     },
     now: () => (t += 600),
     flushIntervalMs: 1000,

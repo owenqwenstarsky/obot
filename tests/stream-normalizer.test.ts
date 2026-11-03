@@ -163,13 +163,13 @@ describe("ResponseStreamNormalizer", () => {
   it("falls back to a generic tool part for unknown item types and ignores unknown events", () => {
     const { snap } = run([
       { type: "response.some_future_event", foo: 1 },
-      { type: "response.output_item.added", item: { id: "fc_1", type: "function_call", status: "in_progress", name: "x" } },
-      { type: "response.output_item.done", item: { id: "fc_1", type: "function_call", status: "completed", name: "x" } },
+      { type: "response.output_item.added", item: { id: "ci_1", type: "code_interpreter_call", status: "in_progress", name: "x" } },
+      { type: "response.output_item.done", item: { id: "ci_1", type: "code_interpreter_call", status: "completed", name: "x" } },
       { type: "response.output_item.added" }, // malformed
       { type: "response.output_text.delta" }, // malformed
     ]);
     expect(snap.parts).toHaveLength(1);
-    expect(snap.parts[0]).toMatchObject({ type: "tool", tool: "generic", itemType: "function_call", status: "completed" });
+    expect(snap.parts[0]).toMatchObject({ type: "tool", tool: "generic", itemType: "code_interpreter_call", status: "completed" });
   });
 
   it("recovers output from the final response when no item events were streamed", () => {
@@ -210,5 +210,49 @@ describe("ResponseStreamNormalizer", () => {
       totalTokens: 12,
     });
     expect(parseUsage(null)).toBeNull();
+  });
+});
+
+describe("ResponseStreamNormalizer function calls", () => {
+  it("streams function call arguments and records completed calls", () => {
+    const { snap, clientParts } = run([
+      { type: "response.output_item.added", item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "bash", arguments: "" } },
+      { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: '{"comm' },
+      { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: 'and":"ls"}' },
+      { type: "response.function_call_arguments.done", item_id: "fc_1", arguments: '{"command":"ls"}' },
+      {
+        type: "response.output_item.done",
+        item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "bash", arguments: '{"command":"ls"}', status: "completed" },
+      },
+      { type: "response.completed", response: { usage } },
+    ]);
+    expect(snap.parts[0]).toMatchObject({ type: "tool", tool: "function", callId: "call_1", name: "bash", status: "pending", argsText: '{"command":"ls"}' });
+    expect(clientParts).toEqual(snap.parts);
+    expect(snap.functionCalls).toEqual([{ itemId: "fc_1", callId: "call_1", name: "bash", arguments: '{"command":"ls"}', partIndex: 0 }]);
+  });
+
+  it("appends to a shared parts array with an id prefix and only finalizes its own parts", () => {
+    const shared: MessagePart[] = [{ type: "reasoning", id: "old", summary: "", startedAt: 1 }];
+    const n = new ResponseStreamNormalizer(clock(), { parts: shared, idPrefix: "s1_" });
+    const ops = n.apply({ type: "response.output_item.added", item: { id: "msg", type: "message" } });
+    expect(ops[0]).toMatchObject({ op: "upsert", index: 1 });
+    n.apply({ type: "response.output_item.added", item: { id: "fc", type: "function_call", call_id: "c", name: "x" } });
+    n.finalizeOpenParts();
+    const snap = n.snapshot();
+    expect(snap.stepPartStart).toBe(1);
+    expect(shared[1].id).toBe("s1_msg");
+    expect((shared[0] as { endedAt?: number }).endedAt).toBeUndefined();
+    expect(shared[2]).toMatchObject({ status: "cancelled" });
+    expect(snap.functionCalls).toEqual([]);
+  });
+
+  it("recovers function calls from a final-only response", () => {
+    const { snap } = run([
+      {
+        type: "response.completed",
+        response: { usage, output: [{ id: "fc", type: "function_call", call_id: "c9", name: "x", arguments: "{}" }] },
+      },
+    ]);
+    expect(snap.functionCalls.map((c) => c.callId)).toEqual(["c9"]);
   });
 });

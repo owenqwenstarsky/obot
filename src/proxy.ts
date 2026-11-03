@@ -17,5 +17,6 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:png|svg|ico|jpg|webp)$).*)"],
+  // artifact-runtime is loaded by sandboxed (opaque-origin, cookieless) artifact iframes.
+  matcher: ["/((?!api|_next/static|_next/image|artifact-runtime/|favicon.ico|.*\\.(?:png|svg|ico|jpg|webp)$).*)"],
 };
