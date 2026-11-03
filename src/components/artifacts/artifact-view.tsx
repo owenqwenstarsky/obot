@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { Streamdown } from "streamdown";
 import { code as codePlugin } from "@streamdown/code";
-import { Check, Copy, Download, ExternalLink, Loader2, MessageSquare, MoreHorizontal, Pencil, Trash2, TriangleAlert, X } from "lucide-react";
+import { ArrowLeft, Check, Copy, Download, ExternalLink, Loader2, MessageSquare, MoreHorizontal, Pencil, Trash2, TriangleAlert, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useSidebarCollapsed } from "@/components/app/sidebar-state";
 import { ArtifactFrame } from "./artifact-frame";
 import { KIND_LABEL, KindIcon } from "./artifact-kind";
 
@@ -60,6 +61,7 @@ export function ArtifactView({
   const [version, setVersion] = useState<number | null>(initialVersion);
   const [tab, setTab] = useState<"preview" | "code">("preview");
   const [copied, setCopied] = useState(false);
+  const sidebarCollapsed = useSidebarCollapsed();
   const { data: a, isLoading, error } = useArtifact(artifactId, version);
   const content = a?.version?.content ?? "";
   const codeMd = useMemo(() => (a ? fenced(LANG[a.kind], content) : ""), [a, content]);
@@ -116,7 +118,18 @@ export function ArtifactView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className={cn("flex items-center gap-2 border-b px-3 py-2", variant === "page" && "px-4 py-3")}>
+      <div
+        className={cn(
+          "flex items-center gap-2 border-b px-3 py-2",
+          // On the page, leave room for the shell's floating sidebar buttons when they're shown.
+          variant === "page" && cn("min-h-[3.25rem] py-2 pr-3 pl-[5.5rem]", !sidebarCollapsed && "md:pl-3"),
+        )}
+      >
+        {variant === "page" && (
+          <IconButton label="All artifacts" onClick={() => router.push("/artifacts")}>
+            <ArrowLeft />
+          </IconButton>
+        )}
         {a ? <KindIcon kind={a.kind} className="size-4 shrink-0 text-muted-foreground" /> : <Skeleton className="size-4" />}
         <div className="min-w-0 flex-1">
           {a ? (
