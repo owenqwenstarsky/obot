@@ -234,8 +234,7 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
                 How can I help, {user.name.split(" ")[0]}?
               </h1>
               <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                Start a thread with the agent. Turn on <span className="font-medium text-foreground">Search</span> to let it browse
-                the web and cite its sources.
+                Start a thread with the agent.
               </p>
               {!modelsLoading && models.length === 0 && (
                 <p className="mt-6 rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
