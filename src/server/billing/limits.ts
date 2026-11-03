@@ -105,3 +105,17 @@ export function evaluateUnpriced(
     message: "This model has no price configured yet, so it isn't available on a limited plan. Ask an admin to set a price.",
   };
 }
+
+export type SpendAlertLevel = "warning" | "reached";
+export const SPEND_WARNING_RATIO = 0.8;
+
+/** Alert level for a window: ≥80% of the cap warns, ≥100% means the cap is reached. Null when uncapped. */
+export function spendAlertLevel(spent: bigint | number, limit: bigint | number | null): SpendAlertLevel | null {
+  if (limit == null) return null;
+  const s = Number(spent);
+  const l = Number(limit);
+  if (l <= 0) return s >= 0 ? "reached" : null;
+  if (s >= l) return "reached";
+  if (s >= l * SPEND_WARNING_RATIO) return "warning";
+  return null;
+}

@@ -22,6 +22,9 @@ export async function getAgentFlags(settings?: AppSettings): Promise<AgentFlags>
     sandboxPythonEnabled: s.sandboxPythonEnabled,
     artifactsEnabled: s.artifactsEnabled,
     inlineUiEnabled: s.inlineUiEnabled,
+    fetchUrlEnabled: s.fetchUrlEnabled,
+    // Instance switch only; runs AND this with the user's own setting.
+    memoryEnabled: s.memoryEnabled,
     subagentsEnabled: s.subagentsEnabled,
     subagentMaxConcurrent: s.subagentMaxConcurrent,
     subagentModelCount,

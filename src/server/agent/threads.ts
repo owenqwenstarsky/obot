@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/server/db";
 import type { CurrentUser } from "@/server/auth/session";
 import { getOwnedThread } from "@/server/agent/turns";
+import { setThreadProject } from "@/server/projects";
 import { runs, threadDeleteHooks } from "@/server/agent/runtime";
 import { HttpError } from "@/server/auth/errors";
 import {
@@ -13,7 +14,11 @@ import {
   type ThreadListEntry,
 } from "@/server/agent/serialize";
 
-export async function listThreads(user: CurrentUser, query?: string | null): Promise<ThreadListEntry[]> {
+export async function listThreads(
+  user: CurrentUser,
+  query?: string | null,
+  opts: { projectId?: string | null } = {},
+): Promise<ThreadListEntry[]> {
   const q = query?.trim();
   const threads = await db.thread.findMany({
     where: {
@@ -21,9 +26,11 @@ export async function listThreads(user: CurrentUser, query?: string | null): Pro
       deletedAt: null,
       parentThreadId: null,
       ...(q ? { title: { contains: q, mode: "insensitive" as const } } : {}),
+      ...(opts.projectId ? { projectId: opts.projectId } : {}),
     },
     orderBy: [{ pinned: "desc" }, { lastMessageAt: "desc" }],
     take: 500,
+    include: { project: { select: { id: true, name: true, deletedAt: true } } },
   });
   const ids = threads.map((t) => t.id);
   const children = ids.length
@@ -45,17 +52,18 @@ export async function listThreads(user: CurrentUser, query?: string | null): Pro
     list.push({ id: c.id, title: c.title, running: liveThreads.has(c.id), taskStatus: c.task?.status ?? null });
     byParent.set(c.parentThreadId!, list);
   }
-  return threads.map((t) => ({
+  return threads.map(({ project, ...t }) => ({
     ...serializeThread(t),
     running: liveThreads.has(t.id),
     children: byParent.get(t.id) ?? [],
+    project: project && !project.deletedAt ? { id: project.id, name: project.name } : null,
   }));
 }
 
 export async function getThreadDetail(user: CurrentUser, threadId: string): Promise<ClientThreadDetail> {
   const thread = await getOwnedThread(user, threadId);
   const usageWhere = { threadId, kind: { in: ["CHAT" as const, "SUBAGENT" as const] }, messageId: { not: null } };
-  const [messages, usage, unpriced, spent, activeRun, parent, task, tasks] = await Promise.all([
+  const [messages, usage, unpriced, spent, runningRows, parent, task, tasks] = await Promise.all([
     db.message.findMany({ where: { threadId }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] }),
     db.usageRecord.groupBy({
       by: ["messageId"],
@@ -76,7 +84,7 @@ export async function getThreadDetail(user: CurrentUser, threadId: string): Prom
       where: thread.parentThreadId ? { threadId } : { OR: [{ threadId }, { rootThreadId: threadId }] },
       _sum: { costMicros: true },
     }),
-    db.run.findFirst({ where: { threadId, status: "RUNNING" }, orderBy: { startedAt: "desc" } }),
+    db.run.findMany({ where: { threadId, status: "RUNNING" }, orderBy: { startedAt: "asc" } }),
     thread.parentThreadId
       ? db.thread.findFirst({ where: { id: thread.parentThreadId }, select: { id: true, title: true } })
       : Promise.resolve(null),
@@ -103,12 +111,14 @@ export async function getThreadDetail(user: CurrentUser, threadId: string): Prom
       ];
     }),
   );
-  const live = activeRun && runs().get(activeRun.id) ? activeRun : null;
+  const live = runningRows.filter((r) => runs().get(r.id)).map((r) => ({ id: r.id, messageId: r.assistantMessageId }));
   return {
     ...serializeThread(thread),
     spentMicros: Number(spent._sum.costMicros ?? 0n),
     messages: messages.map((m) => serializeMessage(m, usageByMessage.get(m.id))),
-    activeRun: live ? { id: live.id, messageId: live.assistantMessageId } : null,
+    currentLeafId: thread.currentLeafId,
+    activeRun: live[0] ?? null,
+    activeRuns: live,
     parent: parent ?? null,
     task: task ? serializeTask(task) : null,
     tasks: tasks.map(serializeTask),
@@ -118,9 +128,10 @@ export async function getThreadDetail(user: CurrentUser, threadId: string): Prom
 export async function updateThread(
   user: CurrentUser,
   threadId: string,
-  patch: { title?: string; pinned?: boolean; webSearchEnabled?: boolean },
+  patch: { title?: string; pinned?: boolean; webSearchEnabled?: boolean; projectId?: string | null },
 ) {
   await getOwnedThread(user, threadId);
+  if (patch.projectId !== undefined) await setThreadProject(user, threadId, patch.projectId);
   const thread = await db.thread.update({
     where: { id: threadId },
     data: {

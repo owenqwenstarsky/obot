@@ -1,14 +1,17 @@
 "use client";
 
 import { memo, useState } from "react";
-import { Check, Copy, Pencil, RefreshCw, Square } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, FileText, Pencil, RefreshCw, Square } from "lucide-react";
 import { toast } from "sonner";
 import { copyText } from "@/lib/clipboard";
 import type { ClientMessage } from "@/server/agent/serialize";
-import { partsToText, type UserImagePart } from "@/lib/parts";
+import { partsToText, type UserFilePart, type UserImagePart } from "@/lib/parts";
 import { effortLabel } from "@/lib/efforts";
 import { formatTokens, formatUsd } from "@/lib/money";
 import { PartsRenderer } from "./parts/registry";
+import { formatBytes } from "./parts/bash-part";
+import { useMessageView } from "./view-context";
+import type { BranchInfo } from "@/lib/branches";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -51,17 +54,54 @@ function IconAction({ label, onClick, children, disabled }: { label: string; onC
   );
 }
 
+/** ‹ 2/3 › control for moving between versions of a message. */
+function BranchSwitcher({
+  branch,
+  onSwitch,
+  disabled,
+}: {
+  branch: BranchInfo;
+  onSwitch: (messageId: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <span className="inline-flex items-center text-xs text-muted-foreground tabular-nums">
+      <IconAction label="Previous version" disabled={disabled || !branch.prevId} onClick={() => branch.prevId && onSwitch(branch.prevId)}>
+        <ChevronLeft />
+      </IconAction>
+      <span className="min-w-8 text-center" aria-label={`Version ${branch.index} of ${branch.total}`}>
+        {branch.index}/{branch.total}
+      </span>
+      <IconAction label="Next version" disabled={disabled || !branch.nextId} onClick={() => branch.nextId && onSwitch(branch.nextId)}>
+        <ChevronRight />
+      </IconAction>
+    </span>
+  );
+}
+
+type BranchProps = {
+  /** Sibling position; the switcher shows when there is more than one version. */
+  branch?: BranchInfo | null;
+  onSwitchBranch?: (messageId: string) => void;
+  branchDisabled?: boolean;
+};
+
 function UserMessageImpl({
   message,
   canEdit,
   onEdit,
+  branch,
+  onSwitchBranch,
+  branchDisabled,
 }: {
   message: ClientMessage;
   canEdit: boolean;
   onEdit: (text: string) => Promise<void>;
-}) {
+} & BranchProps) {
   const text = partsToText(message.parts);
   const images = message.parts.filter((p): p is UserImagePart => p.type === "user_image");
+  const files = message.parts.filter((p): p is UserFilePart => p.type === "user_file");
+  const { attachmentUrl } = useMessageView();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
   const [saving, setSaving] = useState(false);
@@ -84,7 +124,7 @@ function UserMessageImpl({
           </Button>
           <Button
             size="sm"
-            disabled={saving || (!draft.trim() && images.length === 0)}
+            disabled={saving || (!draft.trim() && images.length === 0 && files.length === 0)}
             onClick={async () => {
               setSaving(true);
               try {
@@ -98,7 +138,7 @@ function UserMessageImpl({
             Save & send
           </Button>
         </div>
-        <p className="text-right text-xs text-muted-foreground">Replies after this message will be replaced.</p>
+        <p className="text-right text-xs text-muted-foreground">Saved as a new version; the current one is kept.</p>
       </div>
     );
   }
@@ -108,13 +148,34 @@ function UserMessageImpl({
       {images.length > 0 && (
         <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
           {images.map((img) => (
-            <a key={img.id} href={`/api/uploads/${img.attachmentId}`} target="_blank" rel="noopener noreferrer">
+            <a key={img.id} href={attachmentUrl(img.attachmentId)} target="_blank" rel="noopener noreferrer">
               {/* eslint-disable-next-line @next/next/no-img-element -- authenticated user uploads */}
               <img
-                src={`/api/uploads/${img.attachmentId}`}
+                src={attachmentUrl(img.attachmentId)}
                 alt="Attached image"
                 className="max-h-56 max-w-64 rounded-xl border object-cover"
               />
+            </a>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
+          {files.map((f) => (
+            <a
+              key={f.id}
+              href={attachmentUrl(f.attachmentId)}
+              className="flex max-w-64 min-w-0 items-center gap-2.5 rounded-xl border bg-card px-3 py-2 transition-colors hover:bg-muted/60"
+              title={f.sandboxPath ? `Also in the sandbox at ${f.sandboxPath}` : f.fileName}
+            >
+              <FileText className="size-4 shrink-0 text-muted-foreground" />
+              <span className="min-w-0">
+                <span className="block truncate text-xs font-medium">{f.fileName}</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  {formatBytes(f.size)}
+                  {f.chars === 0 ? " · no text found" : ""}
+                </span>
+              </span>
             </a>
           ))}
         </div>
@@ -137,6 +198,9 @@ function UserMessageImpl({
             <Pencil />
           </IconAction>
         )}
+        {branch && branch.total > 1 && onSwitchBranch && (
+          <BranchSwitcher branch={branch} onSwitch={onSwitchBranch} disabled={branchDisabled} />
+        )}
       </div>
     </div>
   );
@@ -150,13 +214,19 @@ function AssistantMessageImpl({
   canRegenerate,
   isLast,
   onRegenerate,
+  branch,
+  onSwitchBranch,
+  branchDisabled,
+  footer,
 }: {
   message: ClientMessage;
   modelName: string | null;
   canRegenerate: boolean;
   isLast: boolean;
   onRegenerate: () => void;
-}) {
+  /** Extra controls at the end of the action row (e.g. "Continue with this" in comparisons). */
+  footer?: React.ReactNode;
+} & BranchProps) {
   const streaming = message.status === "STREAMING";
   const text = partsToText(message.parts);
   const u = message.usage;
@@ -187,6 +257,9 @@ function AssistantMessageImpl({
             isLast ? "opacity-100" : "opacity-0 pointer-coarse:opacity-100",
           )}
         >
+          {branch && branch.total > 1 && onSwitchBranch && (
+            <BranchSwitcher branch={branch} onSwitch={onSwitchBranch} disabled={branchDisabled} />
+          )}
           {text && <CopyButton text={text} />}
           {canRegenerate && (
             <IconAction label="Regenerate" onClick={onRegenerate}>
@@ -230,6 +303,7 @@ function AssistantMessageImpl({
               </TooltipContent>
             )}
           </Tooltip>
+          {footer && <span className="ml-auto flex shrink-0 items-center gap-1">{footer}</span>}
         </div>
       )}
     </div>

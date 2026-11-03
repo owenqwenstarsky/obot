@@ -64,6 +64,21 @@ enum UsageKind {
   SUBAGENT
 }
 
+enum PromptScope {
+  USER
+  INSTANCE
+}
+
+enum MemorySource {
+  AGENT
+  USER
+}
+
+enum AttachmentKind {
+  IMAGE
+  DOCUMENT
+}
+
 enum ArtifactKind {
   MARKDOWN
   HTML
@@ -109,6 +124,11 @@ model User {
   webSearchDefault   Boolean?
   defaultModelId     String?
   defaultEffort      String?
+  /// Personal instructions included in every chat's system prompt.
+  aboutMe            String?
+  responseStyle      String?
+  /// Let the agent save and use memories for this user.
+  memoryEnabled      Boolean    @default(false)
 
   sessions       Session[]
   accounts       Account[]
@@ -120,6 +140,10 @@ model User {
   invitesCreated Invite[]      @relation("InviteCreatedBy")
   invitesUsed    Invite[]      @relation("InviteUsedBy")
   pricesCreated  ModelPrice[]
+  projects       Project[]
+  memories       Memory[]
+  threadShares   ThreadShare[]
+  prompts        Prompt[]
 
   @@map("user")
 }
@@ -213,22 +237,25 @@ model AppSettings {
   subagentsEnabled          Boolean             @default(false)
   subagentMaxConcurrent     Int                 @default(4)
   subagentMaxSteps          Int                 @default(30)
+  fetchUrlEnabled           Boolean             @default(true)
+  memoryEnabled             Boolean             @default(true)
+  sharingEnabled            Boolean             @default(true)
   updatedAt                 DateTime            @updatedAt
 
   @@map("app_settings")
 }
 
 model Model {
-  id                    String       @id
+  id                    String         @id
   ownedBy               String?
-  enabled               Boolean      @default(false)
-  available             Boolean      @default(true)
+  enabled               Boolean        @default(false)
+  available             Boolean        @default(true)
   displayNameOverride   String?
   contextWindowOverride Int?
-  sortOrder             Int          @default(0)
+  sortOrder             Int            @default(0)
   lastSeenAt            DateTime?
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
   prices                ModelPrice[]
   subagentModel         SubagentModel?
 
@@ -261,91 +288,116 @@ model ModelPrice {
 // ───────────────────────────── Threads ─────────────────────────────
 
 model Thread {
-  id               String        @id @default(cuid())
+  id               String         @id @default(cuid())
   userId           String
-  user             User          @relation(fields: [userId], references: [id], onDelete: Restrict)
-  title            String        @default("New thread")
-  titleGenerated   Boolean       @default(false)
-  pinned           Boolean       @default(false)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  title            String         @default("New thread")
+  titleGenerated   Boolean        @default(false)
+  pinned           Boolean        @default(false)
   webSearchEnabled Boolean?
   lastModelId      String?
   lastEffort       String?
   lastContext      Json?
+  /// Leaf of the branch currently shown (plain id; no FK to avoid a cycle with message).
+  currentLeafId    String?
   deletedAt        DateTime?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  lastMessageAt    DateTime      @default(now())
-  kind             ThreadKind    @default(CHAT)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  lastMessageAt    DateTime       @default(now())
+  kind             ThreadKind     @default(CHAT)
   parentThreadId   String?
-  parentThread     Thread?       @relation("ThreadChildren", fields: [parentThreadId], references: [id], onDelete: Cascade)
-  children         Thread[]      @relation("ThreadChildren")
+  parentThread     Thread?        @relation("ThreadChildren", fields: [parentThreadId], references: [id], onDelete: Cascade)
+  children         Thread[]       @relation("ThreadChildren")
   messages         Message[]
   runs             Run[]
   spawnedTasks     SubagentTask[] @relation("TaskParent")
   task             SubagentTask?  @relation("TaskChild")
   artifacts        Artifact[]
+  projectId        String?
+  project          Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  shares           ThreadShare[]
 
   @@index([userId, deletedAt, lastMessageAt])
+  @@index([projectId])
   @@index([parentThreadId])
   @@map("thread")
 }
 
 model Message {
-  id           String        @id @default(cuid())
-  threadId     String
-  thread       Thread        @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  role         MessageRole
-  parts        Json          @default("[]")
-  rawOutput    Json?
-  modelId      String?
-  effort       String?
-  webSearch    Boolean       @default(false)
-  status       MessageStatus @default(COMPLETE)
-  error        String?
-  responseId   String?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  attachments  Attachment[]
-  runs         Run[]
-  spawnedTasks SubagentTask[]
+  id             String         @id @default(cuid())
+  threadId       String
+  thread         Thread         @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  parts          Json           @default("[]")
+  rawOutput      Json?
+  modelId        String?
+  effort         String?
+  webSearch      Boolean        @default(false)
+  status         MessageStatus  @default(COMPLETE)
+  error          String?
+  responseId     String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  attachments    Attachment[]
+  runs           Run[]
+  spawnedTasks   SubagentTask[]
+  /// Message tree: edits and regenerations are siblings under the same parent.
+  parentId       String?
+  parent         Message?       @relation("MessageTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children       Message[]      @relation("MessageTree")
+  /// Replies generated side by side for a model comparison share this id.
+  compareGroupId String?
+  /// Plain text of the message for full-text search (kept in sync by the app). Indexed by the raw-SQL
+  /// GIN index "message_search_idx" (migration 20261104000500_message_search); keep it if you regenerate migrations.
+  searchText     String?
 
   @@index([threadId, createdAt])
+  @@index([parentId])
   @@map("message")
 }
 
 model Attachment {
-  id        String   @id @default(cuid())
+  id        String         @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Restrict)
   messageId String?
-  message   Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  message   Message?       @relation(fields: [messageId], references: [id], onDelete: SetNull)
   path      String
   fileName  String
   mime      String
   size      Int
   width     Int?
   height    Int?
-  createdAt DateTime @default(now())
+  kind      AttachmentKind @default(IMAGE)
+  /// Sidecar file (relative to UPLOAD_DIR) holding the extracted text of a document.
+  textPath  String?
+  textChars Int?
+  pageCount Int?
+  /// Reference file of a project (documents only).
+  projectId String?
+  project   Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt DateTime       @default(now())
 
   @@index([messageId])
   @@index([userId])
+  @@index([projectId])
   @@map("attachment")
 }
 
 model Run {
-  id                 String    @id @default(cuid())
+  id                 String     @id @default(cuid())
   threadId           String
-  thread             Thread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  thread             Thread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
   userId             String
-  user               User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user               User       @relation(fields: [userId], references: [id], onDelete: Restrict)
   assistantMessageId String?
-  assistantMessage   Message?  @relation(fields: [assistantMessageId], references: [id], onDelete: SetNull)
-  status             RunStatus @default(RUNNING)
+  assistantMessage   Message?   @relation(fields: [assistantMessageId], references: [id], onDelete: SetNull)
+  status             RunStatus  @default(RUNNING)
   error              String?
   kind               ThreadKind @default(CHAT)
   parentRunId        String?
-  steps              Int       @default(0)
-  startedAt          DateTime  @default(now())
+  steps              Int        @default(0)
+  startedAt          DateTime   @default(now())
   endedAt            DateTime?
 
   @@index([threadId, status])
@@ -474,4 +526,79 @@ model ArtifactVersion {
 
   @@unique([artifactId, version])
   @@map("artifact_version")
+}
+
+// ───────────────────────────── Projects ─────────────────────────────
+
+/// A folder of threads with shared instructions, reference files, and default model settings.
+model Project {
+  id               String       @id @default(cuid())
+  userId           String
+  user             User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  name             String
+  description      String?
+  instructions     String?
+  defaultModelId   String?
+  defaultEffort    String?
+  webSearchDefault Boolean?
+  deletedAt        DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  threads          Thread[]
+  files            Attachment[]
+
+  @@index([userId, deletedAt])
+  @@map("project")
+}
+
+/// A fact the agent remembers about its user across threads. Users can view, edit, and delete them.
+model Memory {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  content   String
+  source    MemorySource @default(AGENT)
+  /// Thread the agent saved it from (plain id; threads are soft-deleted).
+  threadId  String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([userId, updatedAt])
+  @@map("memory")
+}
+
+/// A read-only public link to a frozen copy of a thread's visible conversation.
+model ThreadShare {
+  id        String    @id @default(cuid())
+  threadId  String
+  thread    Thread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  /// SHA-256 of the link token; the raw token is only shown once.
+  tokenHash String    @unique
+  /// Snapshot of the conversation at share time (see src/lib/share.ts).
+  snapshot  Json
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([threadId])
+  @@map("thread_share")
+}
+
+/// A saved prompt, inserted from the composer with `/command`. INSTANCE prompts are shared with everyone (admin-managed).
+model Prompt {
+  id        String      @id @default(cuid())
+  scope     PromptScope @default(USER)
+  /// Owner for USER prompts; the admin who created it for INSTANCE prompts.
+  userId    String?
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  command   String
+  title     String
+  body      String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([userId])
+  @@index([scope])
+  @@map("prompt")
 }

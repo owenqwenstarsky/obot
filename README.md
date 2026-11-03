@@ -1,15 +1,24 @@
 # Obot
 
-A self-hosted, multi-user agentic chat platform. People work in **Threads** with an agent that can use tools (OpenAI's hosted web search for now). Tool use streams live and is shown as readable UI instead of raw JSON.
+A self-hosted, multi-user agentic chat platform. People work in **Threads** with an agent that can use tools (hosted web search, reading URLs, a bash sandbox, artifacts, memory, and sub-agents). Tool use streams live and is shown as readable UI instead of raw JSON.
 
 - **Agent threads**: streaming replies, reasoning summaries, web search steps (searches, opened pages, find-in-page) with sources, and inline clickable citations.
 - **Background runs**: replies keep generating on the server if you close or switch tabs. Reopening the thread reattaches to the live stream. Stop works at any time.
 - **Models from CLIProxyAPI**: loaded automatically from `GET /v1/models`. Admins choose which are enabled. Includes a model + reasoning-effort selector (efforts are capped at X-High; Luna also offers "Disabled").
-- **Context indicator**: a ring in the composer with a hover card showing the context breakdown and thread spend.
+- **Context indicator**: a ring in the composer with a hover card showing the context breakdown, thread spend, and what's left of your weekly/monthly budget.
+- **Documents**: attach PDFs and UTF-8 text/code files (CSV, JSON, Markdown, source code…) as well as images. Their text goes to the model, and the originals are copied into the thread's sandbox.
+- **Projects**: folders of threads with shared instructions, reference files, and a default model.
+- **Personalization**: custom instructions ("about you" and "how to respond") plus opt-in memory the agent can add to, with a page to review, edit, and delete it.
+- **Branching**: editing a message or regenerating a reply adds a new version instead of deleting anything; switch between versions with ‹ 2/3 ›.
+- **Model comparison**: send one message to two models and read the replies side by side, then continue with either.
+- **Search**: ⌘K searches every message (full-text) and thread title, and jumps straight to the match.
+- **Prompt library**: save prompts and insert them by typing `/` in the composer. Admins can share prompts with everyone.
+- **Share and export**: read-only public links to a frozen snapshot of a thread (revocable), and Markdown/JSON downloads.
+- **Spend alerts**: a toast at 80% and 100% of a cap, and a hint above the composer while you're close.
 - **Multi-user**: `USER` and `ADMIN` roles. The first account becomes admin; everyone else joins through single-use invite links.
 - **Spend limits**: weekly (Monday 00:00 UTC) and monthly (1st 00:00 UTC) caps. Admins set defaults (an amount or unlimited) and per-user overrides.
 - **Permanent usage ledger**: every request is recorded and never deleted (enforced by a database trigger). The usage page filters by any date range and exports CSV.
-- Images (local disk), auto titles, rename/pin/search/delete, edit and regenerate, and dark/light themes.
+- Auto titles, rename/pin/delete, and dark/light themes.
 
 Built with Next.js 16 (App Router), Prisma 7 + PostgreSQL, Better Auth, Tailwind v4 + shadcn/ui, Streamdown, Recharts, and TanStack Query.
 
@@ -84,6 +93,33 @@ All are toggled in **Admin → Settings**.
 - **Artifacts**: versioned markdown, HTML and React documents, created only when the user asks. HTML and React run in a sandboxed iframe (opaque origin, strict CSP, no network) using a vendored runtime bundled into `public/artifact-runtime/` by `scripts/build-artifact-runtime.mjs` (runs automatically before `dev` and `build`). The Artifacts page can also generate an artifact in a new background thread.
 - **Sub-agents** (off by default): the agent can delegate tasks to child threads (`delegate_task`, `wait_tasks`, `task_status`, `task_cancel`, `subagent_capabilities`). Admins choose the allowed models and the descriptions the agent sees. While children run, the parent waits automatically, wakes to acknowledge each result, then keeps waiting. Children are nested under their parent in the sidebar and share its sandbox.
 
+- **Read web pages** (`fetch_url`, on by default): fetches a URL server-side and returns the main content as markdown (Readability + Turndown on a linkedom DOM; PDFs via unpdf). Only http(s); private, loopback, link-local, CGNAT and other non-public addresses are refused, every redirect hop is re-checked, and sockets connect only to the address that was validated (no DNS rebinding). 15 s timeout, 5 MB body cap (10 MB for PDFs). The prompt tells the agent that fetched content is untrusted data.
+- **Memory** (instance switch on by default; each user opts in under Settings): the agent gets `remember` and `forget`, and the newest memories (up to 50 / 8k characters) are included in its instructions. Sub-agents never see memories or personal instructions.
+- **Public share links** (on by default): turning this off disables every existing link immediately.
+
+### Threads, branches, and comparisons
+
+- **Message tree**: every message has a `parentId`; a thread stores the leaf of the branch on screen (`currentLeafId`). The model always sees exactly the path from the root to the message it is answering. Edits create a sibling user message; regenerating creates a sibling reply. Nothing is deleted, so usage rows, artifacts and sub-agent threads from older versions stay intact.
+- **Comparisons**: the message gets two replies with a shared `compareGroupId`, started at the same time. Both runs only get tools without shared state (web search, `fetch_url`), so they can't interfere through the sandbox, artifacts, sub-agents or memory. Only the primary reply updates the thread's model selection and context meter.
+- **Projects**: project instructions and reference files (up to 20 documents; 30k characters each and 100k in total in the prompt) are added to the instructions of every chat in the project. With the sandbox on, the files are also copied to `/home/user/project`.
+- **Instruction order**: admin prompt → project → the user's custom instructions → memories → tool sections.
+
+### Documents
+
+PDF and UTF-8 text files up to 10 MB, 5 attachments (images and documents combined) per message.
+
+- **Detection**: PDFs by magic bytes; text files need an allowlisted extension, no NUL bytes, and valid UTF-8.
+- **Extraction**: done once at upload. The text is stored next to the file (`<uuid>.txt`) and sent to the model as a `<document>` block (long files keep their head and tail, up to 50k characters, and point to the sandbox copy). Scanned PDFs with no text layer are flagged "no text found".
+- **Downloads**: documents are always served as `application/octet-stream` attachments so the browser never renders them.
+
+### Search
+
+`message.searchText` holds the plain text of each message (user text, reply text, steering) and has a GIN index on `to_tsvector('simple', …)` created by raw SQL in `prisma/migrations/20261104000500_message_search`. Queries are prefix matches (`rust:* & async:*`) built only from letters and digits, ranked with `ts_rank`, with `ts_headline` snippets. Results cover every branch; opening one switches to the branch containing the match.
+
+### Sharing and export
+
+A share stores a snapshot of the visible conversation (reasoning and live tool logs removed) and a SHA-256 hash of its token; the link is shown once. The public page `/share/<token>` renders it read-only, and attachments are served through `/api/share/<token>/attachments/<id>` only if the snapshot references them. Links stop working when revoked, when the thread is deleted, when the owner is disabled, or when sharing is turned off. Export (`/api/threads/<id>/export?format=md|json`) downloads the visible conversation.
+
 ### Pricing and spend
 
 The Responses API (and CLIProxyAPI) report **token counts only**, never dollars. Obot multiplies the API-reported usage by the **admin price table** (`ModelPrice`):
@@ -109,6 +145,7 @@ Each user is **Inherit** (instance default), **Custom** (weekly and/or monthly c
 
 - **Enforcement**: limits are checked before every run. The monthly cap is checked first, so the error message shows when the limit resets.
 - **Overshoot**: a run that's already in progress can push spend slightly past a cap.
+- **Alerts**: `/api/me/limits` reports `warning` (≥ 80%) or `reached` per window. The app shows one toast per level per period (tracked in localStorage) and a hint above the composer.
 - **Titles**: thread titles count toward the user's spend and appear as `TITLE` on the usage page.
 
 ### Usage ledger
@@ -125,7 +162,7 @@ Each user is **Inherit** (instance default), **Custom** (weekly and/or monthly c
 - **Accounts**: `/api/register` creates the first account (as admin) or redeems an invite. It runs inside a transaction that holds a Postgres advisory lock, so two "first" registrations can't both become admin.
 - **Invites**: tokens are stored as SHA-256 hashes, and the raw link is shown only once.
 - **Disabled accounts**: disabling a user revokes their sessions and blocks new ones.
-- **Data access**: threads, messages, runs and uploads are owner-only (admins included). Admins can see everyone's usage.
+- **Data access**: threads, messages, runs and uploads are owner-only (admins included). The only exception is a share link, which exposes its own snapshot and the attachments it references. Admins can see everyone's usage.
 
 ### Images
 
@@ -148,6 +185,9 @@ src/config/                  env validation, model metadata
 src/server/llm/              CLIProxyAPI client, model catalog, request builder, stream normalizer
 src/server/agent/            run manager, turns (send/edit/regenerate), threads, titles
 src/server/billing/          pricing, limits (pure), usage ledger + reports
+src/server/web/              fetch_url: SSRF guard, fetch + HTML/PDF → markdown
+src/server/uploads/          upload classification, text extraction, storage
+src/server/{projects,memories,prompts,shares,search}.ts   feature services
 src/server/auth/             Better Auth, guards, policy (pure), registration, invites
 src/app/api/                 route handlers
 src/components/chat/         composer, model selector, context ring, messages, part renderers

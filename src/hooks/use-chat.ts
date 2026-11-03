@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { applyPartOps, type PartOp } from "@/lib/part-ops";
-import type { ContextSnapshot } from "@/lib/parts";
+import type { ContextSnapshot, MessagePart } from "@/lib/parts";
 import type { ClientTask, PendingSteer, RunEvent, RunPhase } from "@/lib/run-events";
-import type { ClientMessage, ClientThread, ClientThreadDetail } from "@/server/agent/serialize";
+import type { ClientAttachment, ClientMessage, ClientThread, ClientThreadDetail } from "@/server/agent/serialize";
 import type { ThreadListItem } from "@/hooks/queries";
+import { activePath, deepestLeaf } from "@/lib/branches";
 
 export type TurnSettings = { modelId: string; effort: string | null; webSearch: boolean };
 
@@ -16,6 +17,8 @@ type TurnResponse = {
   assistant: ClientMessage;
   thread: ClientThread;
   userMessage?: ClientMessage;
+  /** Extra side-by-side replies (model comparison). */
+  compare?: { runId: string; assistant: ClientMessage }[];
 };
 
 export type ThreadMeta = {
@@ -29,9 +32,11 @@ export type ThreadMeta = {
   kind: "CHAT" | "SUBAGENT";
   parent: { id: string; title: string } | null;
   task: ClientTask | null;
+  projectId: string | null;
 };
 
-type ActiveRun = { id: string; messageId: string };
+/** `primary` runs drive the thread's context meter; comparison runs don't. */
+type ActiveRun = { id: string; messageId: string; primary: boolean };
 
 const MAX_RECONNECTS = 20;
 
@@ -56,12 +61,15 @@ function parseSse(buffer: string): { events: RunEvent[]; rest: string } {
   return { events, rest };
 }
 
-export function useChat(initialThreadId: string | null) {
+export function useChat(initialThreadId: string | null, opts: { projectId?: string | null } = {}) {
+  const projectId = opts.projectId ?? null;
   const qc = useQueryClient();
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
   const [meta, setMeta] = useState<ThreadMeta | null>(null);
-  const [messages, setMessages] = useState<ClientMessage[]>([]);
-  const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
+  /** Every message on every branch. */
+  const [allMessages, setMessages] = useState<ClientMessage[]>([]);
+  const [leafId, setLeafId] = useState<string | null>(null);
+  const [activeRuns, setActiveRuns] = useState<ActiveRun[]>([]);
   const [loading, setLoading] = useState<boolean>(!!initialThreadId);
   const [notFound, setNotFound] = useState(false);
   const [sending, setSending] = useState(false);
@@ -69,17 +77,22 @@ export function useChat(initialThreadId: string | null) {
   const [pendingSteers, setPendingSteers] = useState<PendingSteer[]>([]);
   const [tasks, setTasks] = useState<ClientTask[]>([]);
 
-  const streamAbort = useRef<AbortController | null>(null);
-  const lastSeq = useRef(0);
+  const streams = useRef(new Map<string, AbortController>());
+  const seqs = useRef(new Map<string, number>());
   const mounted = useRef(true);
 
   useEffect(() => {
     mounted.current = true;
+    const live = streams.current;
     return () => {
       mounted.current = false;
-      streamAbort.current?.abort();
+      for (const c of live.values()) c.abort();
+      live.clear();
     };
   }, []);
+
+  /** The conversation currently shown: root → current leaf. */
+  const messages = useMemo(() => activePath(allMessages, leafId), [allMessages, leafId]);
 
   const applyDetail = useCallback((d: ClientThreadDetail) => {
     setMeta({
@@ -93,6 +106,7 @@ export function useChat(initialThreadId: string | null) {
       kind: d.kind,
       parent: d.parent,
       task: d.task,
+      projectId: d.projectId,
     });
     setTasks(d.tasks);
     return d;
@@ -172,11 +186,20 @@ export function useChat(initialThreadId: string | null) {
   /** Attach to a run's SSE stream, replaying after lastSeq; reconnects on network drops. */
   const connect = useCallback(
     async (run: ActiveRun, tId: string) => {
-      streamAbort.current?.abort();
+      streams.current.get(run.id)?.abort();
       const controller = new AbortController();
-      streamAbort.current = controller;
-      setActiveRun(run);
+      streams.current.set(run.id, controller);
+      if (!seqs.current.has(run.id)) seqs.current.set(run.id, 0);
+      setActiveRuns((prev) => [...prev.filter((r) => r.id !== run.id), run]);
       markThreadRunning(tId, true);
+      const lastSeq = {
+        get current() {
+          return seqs.current.get(run.id) ?? 0;
+        },
+        set current(v: number) {
+          seqs.current.set(run.id, v);
+        },
+      };
 
       let finished = false;
       let attempts = 0;
@@ -191,9 +214,9 @@ export function useChat(initialThreadId: string | null) {
           } else if (e.type === "title") {
             setThreadTitle(e.threadId, e.title);
           } else if (e.type === "phase") {
-            setPhase(e.phase);
+            if (run.primary) setPhase(e.phase);
           } else if (e.type === "steer_queue") {
-            setPendingSteers(e.pending);
+            if (run.primary) setPendingSteers(e.pending);
           } else if (e.type === "task") {
             const task = e.task;
             setTasks((prev) => (prev.some((t) => t.id === task.id) ? prev.map((t) => (t.id === task.id ? task : t)) : [...prev, task]));
@@ -204,8 +227,10 @@ export function useChat(initialThreadId: string | null) {
               // Flush ops batched before `done` so nothing is lost; done.parts then replaces them.
               ops = [];
             }
-            setPhase(null);
-            setPendingSteers([]);
+            if (run.primary) {
+              setPhase(null);
+              setPendingSteers([]);
+            }
             updateMessage(run.messageId, (m) => ({
               ...m,
               parts: e.parts,
@@ -225,7 +250,7 @@ export function useChat(initialThreadId: string | null) {
                 : m.usage,
             }));
             if (e.contextUsage || e.costMicros) {
-              const ctxUsage = e.contextUsage;
+              const ctxUsage = run.primary ? e.contextUsage : null;
               setMeta((m) =>
                 m
                   ? {
@@ -278,9 +303,11 @@ export function useChat(initialThreadId: string | null) {
         }
       }
 
+      if (streams.current.get(run.id) === controller) streams.current.delete(run.id);
+      seqs.current.delete(run.id);
       if (controller.signal.aborted || !mounted.current) return;
-      setActiveRun((cur) => (cur?.id === run.id ? null : cur));
-      markThreadRunning(tId, false);
+      setActiveRuns((prev) => prev.filter((r) => r.id !== run.id));
+      if (streams.current.size === 0) markThreadRunning(tId, false);
       void qc.invalidateQueries({ queryKey: ["limits"] });
       void refreshMeta(tId);
       // Auto-titles can land a moment after the reply finishes; pick them up.
@@ -301,11 +328,14 @@ export function useChat(initialThreadId: string | null) {
         if (cancelled) return;
         applyDetail(thread);
         setMessages(thread.messages);
+        setLeafId(thread.currentLeafId);
         setLoading(false);
-        if (thread.activeRun?.messageId) {
-          lastSeq.current = 0;
-          void connect({ id: thread.activeRun.id, messageId: thread.activeRun.messageId }, thread.id);
-        }
+        thread.activeRuns.forEach((r, i) => {
+          if (!r.messageId) return;
+          seqs.current.set(r.id, 0);
+          const isPrimary = r.messageId === thread.currentLeafId || (i === 0 && !thread.activeRuns.some((x) => x.messageId === thread.currentLeafId));
+          void connect({ id: r.id, messageId: r.messageId, primary: isPrimary }, thread.id);
+        });
       } catch {
         if (!cancelled) {
           setNotFound(true);
@@ -331,22 +361,49 @@ export function useChat(initialThreadId: string | null) {
         kind: res.thread.kind,
         parent: m?.parent ?? null,
         task: m?.task ?? null,
+        projectId: res.thread.projectId,
       }));
-      lastSeq.current = 0;
-      void connect({ id: res.runId, messageId: res.assistant.id }, res.thread.id);
+      seqs.current.set(res.runId, 0);
+      void connect({ id: res.runId, messageId: res.assistant.id, primary: true }, res.thread.id);
+      for (const c of res.compare ?? []) {
+        seqs.current.set(c.runId, 0);
+        void connect({ id: c.runId, messageId: c.assistant.id, primary: false }, res.thread.id);
+      }
     },
     [connect],
   );
 
+  /** Add a turn's new messages and move the visible branch to its reply. */
+  const addTurnMessages = useCallback((res: TurnResponse, dropId?: string) => {
+    const added = [...(res.userMessage ? [res.userMessage] : []), res.assistant, ...(res.compare ?? []).map((c) => c.assistant)];
+    setMessages((prev) => [...prev.filter((m) => m.id !== dropId && !added.some((a) => a.id === m.id)), ...added]);
+    setLeafId(res.assistant.id);
+  }, []);
+
   const send = useCallback(
-    async (args: { text: string; attachments: { id: string; mime: string }[] } & TurnSettings) => {
+    async (args: { text: string; attachments: ClientAttachment[]; compare?: { modelId: string; effort: string | null } | null } & TurnSettings) => {
       setSending(true);
       const tempId = `temp_${Date.now()}`;
+      const previousLeaf = leafId;
       const optimistic: ClientMessage = {
         id: tempId,
+        parentId: messages.at(-1)?.id ?? null,
+        compareGroupId: null,
         role: "USER",
         parts: [
-          ...args.attachments.map((a) => ({ type: "user_image" as const, id: `img_${a.id}`, attachmentId: a.id, mime: a.mime })),
+          ...args.attachments.map((a): MessagePart =>
+            a.kind === "IMAGE"
+              ? { type: "user_image", id: `img_${a.id}`, attachmentId: a.id, mime: a.mime }
+              : {
+                  type: "user_file",
+                  id: `file_${a.id}`,
+                  attachmentId: a.id,
+                  fileName: a.fileName,
+                  mime: a.mime,
+                  size: a.size,
+                  chars: a.textChars ?? 0,
+                },
+          ),
           ...(args.text.trim() ? [{ type: "user_text" as const, id: `${tempId}_t`, text: args.text }] : []),
         ],
         modelId: null,
@@ -358,6 +415,7 @@ export function useChat(initialThreadId: string | null) {
         usage: null,
       };
       setMessages((prev) => [...prev, optimistic]);
+      setLeafId(tempId);
       try {
         const body = {
           text: args.text,
@@ -365,19 +423,27 @@ export function useChat(initialThreadId: string | null) {
           modelId: args.modelId,
           effort: args.effort,
           webSearch: args.webSearch,
+          ...(args.compare ? { compare: args.compare } : {}),
+          ...(!threadId && projectId ? { projectId } : {}),
         };
         const res = await api<TurnResponse & { userMessage: ClientMessage }>(
           threadId ? `/api/threads/${threadId}/messages` : "/api/messages",
           { method: "POST", json: body },
         );
-        setMessages((prev) => [...prev.filter((m) => m.id !== tempId), res.userMessage, res.assistant]);
+        addTurnMessages(res, tempId);
         if (!threadId) {
           setThreadId(res.thread.id);
           window.history.replaceState(null, "", `/t/${res.thread.id}`);
           qc.setQueryData<ThreadListItem[]>(["threads"], (old) => [
-            { ...res.thread, running: true, children: [] },
+            { ...res.thread, running: true, children: [], project: null },
             ...(old ?? []).filter((t) => t.id !== res.thread.id),
           ]);
+          // Pick up the project label (and counts on the project page).
+          if (res.thread.projectId) {
+            void qc.invalidateQueries({ queryKey: ["threads"] });
+            void qc.invalidateQueries({ queryKey: ["project", res.thread.projectId] });
+            void qc.invalidateQueries({ queryKey: ["projects"] });
+          }
         } else {
           qc.setQueryData<ThreadListItem[]>(["threads"], (old) =>
             old?.map((t) => (t.id === res.thread.id ? { ...t, ...res.thread, running: true } : t)),
@@ -387,12 +453,13 @@ export function useChat(initialThreadId: string | null) {
         return true;
       } catch (err) {
         setMessages((prev) => prev.filter((m) => m.id !== tempId));
+        setLeafId(previousLeaf);
         throw err;
       } finally {
         setSending(false);
       }
     },
-    [qc, startTurn, threadId],
+    [addTurnMessages, leafId, messages, projectId, qc, startTurn, threadId],
   );
 
   const edit = useCallback(
@@ -401,32 +468,49 @@ export function useChat(initialThreadId: string | null) {
         method: "POST",
         json: { text, ...settings },
       });
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.id === messageId);
-        const kept = idx >= 0 ? prev.slice(0, idx) : prev;
-        return [...kept, res.userMessage, res.assistant];
-      });
+      addTurnMessages(res);
       startTurn(res);
     },
-    [startTurn],
+    [addTurnMessages, startTurn],
   );
 
   const regenerate = useCallback(
     async (messageId: string, settings: TurnSettings) => {
       const res = await api<TurnResponse>(`/api/messages/${messageId}/regenerate`, { method: "POST", json: settings });
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.id === messageId);
-        return [...(idx >= 0 ? prev.slice(0, idx) : prev), res.assistant];
-      });
+      addTurnMessages(res);
       startTurn(res);
     },
-    [startTurn],
+    [addTurnMessages, startTurn],
   );
 
+  /**
+   * Show another branch: `targetId` is a message (usually a sibling of one on the current path);
+   * the view moves to the newest leaf below it. Saved on the server so reloads keep it.
+   */
+  const switchBranch = useCallback(
+    async (targetId: string) => {
+      if (!threadId) return;
+      const prev = leafId;
+      const next = deepestLeaf(allMessages, targetId);
+      if (next === prev) return;
+      setLeafId(next);
+      try {
+        await api(`/api/threads/${threadId}`, { method: "PATCH", json: { currentLeafId: next } });
+      } catch (err) {
+        setLeafId(prev);
+        throw err;
+      }
+    },
+    [allMessages, leafId, threadId],
+  );
+
+  const primaryRun = activeRuns.find((r) => r.primary) ?? activeRuns[0] ?? null;
+  /** Steering and interrupt only make sense with a single run. */
+  const activeRun = activeRuns.length === 1 ? primaryRun : null;
+
   const stop = useCallback(async () => {
-    if (!activeRun) return;
-    await api(`/api/runs/${activeRun.id}/stop`, { method: "POST" }).catch(() => undefined);
-  }, [activeRun]);
+    await Promise.all(activeRuns.map((r) => api(`/api/runs/${r.id}/stop`, { method: "POST" }).catch(() => undefined)));
+  }, [activeRuns]);
 
   /**
    * Send a message into the running turn. Returns false if the run had already finished,
@@ -477,8 +561,12 @@ export function useChat(initialThreadId: string | null) {
     threadId,
     meta,
     messages,
+    allMessages,
+    leafId,
+    switchBranch,
     activeRun,
-    running: !!activeRun,
+    activeRuns,
+    running: activeRuns.length > 0,
     loading,
     notFound,
     sending,

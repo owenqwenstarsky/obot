@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useMessageView } from "../view-context";
 import { Ban, CircleAlert, CircleCheck, Gauge, Hourglass, Loader2, Zap } from "lucide-react";
 import type { NoticePart, WaitingPart } from "@/lib/parts";
 import { cn } from "@/lib/utils";
@@ -19,12 +20,13 @@ export function NoticeLine({ part }: { part: NoticePart }) {
   const n = NOTICE[part.kind];
   const Icon = n.icon;
   const label = n.label(part);
+  const { readOnly } = useMessageView();
   return (
     <div className="flex items-center gap-3 py-0.5 text-xs text-muted-foreground">
       <span className="h-px flex-1 bg-border" />
       <span className="flex min-w-0 items-center gap-1.5">
         <Icon className={cn("size-3.5 shrink-0", n.tone)} />
-        {part.childThreadId ? (
+        {part.childThreadId && !readOnly ? (
           <Link href={`/t/${part.childThreadId}`} className="truncate hover:text-foreground hover:underline">
             {label}
           </Link>

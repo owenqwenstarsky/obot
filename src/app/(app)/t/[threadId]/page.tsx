@@ -1,6 +1,7 @@
 import { ChatView } from "@/components/chat/chat-view";
 
-export default async function ThreadPage({ params }: PageProps<"/t/[threadId]">) {
+export default async function ThreadPage({ params, searchParams }: PageProps<"/t/[threadId]">) {
   const { threadId } = await params;
-  return <ChatView key={threadId} threadId={threadId} />;
+  const { m } = await searchParams;
+  return <ChatView key={threadId} threadId={threadId} focusMessageId={typeof m === "string" ? m : null} />;
 }

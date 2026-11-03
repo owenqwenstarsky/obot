@@ -61,6 +61,8 @@ describe("inline UI prompt", () => {
     sandboxPythonEnabled: false,
     artifactsEnabled: false,
     inlineUiEnabled: true,
+    fetchUrlEnabled: true,
+    memoryEnabled: false,
     subagentsEnabled: false,
     subagentMaxConcurrent: 4,
     subagentModelCount: 0,

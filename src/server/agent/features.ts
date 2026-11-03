@@ -11,6 +11,9 @@ import {
 } from "@/server/agent/runtime";
 import { subagents } from "@/server/subagents";
 import { sandboxes } from "@/server/sandbox";
+import { undiciRequester } from "@/server/web";
+import { fetchUrl } from "@/server/web/fetch-url";
+import { addMemory, deleteMemory } from "@/server/memories";
 import { prismaArtifactStore } from "@/server/artifacts";
 import { createArtifactApi, finalizePendingArtifact } from "@/server/artifacts/core";
 
@@ -25,6 +28,26 @@ registerServiceFactory("sandbox", (p) => {
 });
 
 registerThreadDeleteHook("sandbox", (threadId) => sandboxes().delete(threadId));
+
+registerServiceFactory("web", () => ({
+  web: { fetch: (url, signal) => fetchUrl(url, { request: undiciRequester, signal }) },
+}));
+
+registerServiceFactory("memories", (p) => {
+  if ((p.kind ?? "CHAT") !== "CHAT") return {};
+  return {
+    memories: {
+      add: async (content) => {
+        const m = await addMemory(p.userId, content, { source: "AGENT", threadId: p.threadId });
+        return { id: m.id, content: m.content };
+      },
+      remove: async (id) => {
+        const m = await deleteMemory(p.userId, id);
+        return m ? { content: m.content } : null;
+      },
+    },
+  };
+});
 
 registerServiceFactory("artifacts", (p) => ({
   artifacts: createArtifactApi(prismaArtifactStore, {

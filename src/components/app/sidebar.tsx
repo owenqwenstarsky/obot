@@ -3,7 +3,9 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeft, Search, Shapes, SquarePen, X } from "lucide-react";
+import { FolderOpen, PanelLeft, Search, Shapes, SquarePen, X, Zap } from "lucide-react";
+import { openCommandPalette } from "@/components/app/command-palette";
+import type { ReactNode } from "react";
 import { useThreads } from "@/hooks/queries";
 import { groupThreads } from "@/lib/thread-groups";
 import { ThreadItem } from "@/components/app/thread-item";
@@ -47,24 +49,26 @@ export function Sidebar({ onCollapse, onNavigate }: { onCollapse: () => void; on
             New Thread
           </Link>
         </Button>
-        <Link
-          href="/artifacts"
-          className={cn(
-            "flex h-8 items-center gap-2 rounded-md px-2.5 text-sm transition-colors",
-            pathname.startsWith("/artifacts")
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
-              : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60",
-          )}
-        >
-          <Shapes className="size-4" />
-          Artifacts
-        </Link>
+        <div className="space-y-0.5">
+          <button
+            type="button"
+            onClick={openCommandPalette}
+            className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-sm text-sidebar-foreground/85 transition-colors hover:bg-sidebar-accent/60"
+          >
+            <Search className="size-4" />
+            Search
+            <kbd className="ml-auto rounded border border-sidebar-border px-1.5 font-sans text-[10px] text-muted-foreground">⌘K</kbd>
+          </button>
+          <NavLink href="/projects" pathname={pathname} icon={<FolderOpen className="size-4" />} label="Projects" />
+          <NavLink href="/artifacts" pathname={pathname} icon={<Shapes className="size-4" />} label="Artifacts" />
+          <NavLink href="/prompts" pathname={pathname} icon={<Zap className="size-4" />} label="Prompts" />
+        </div>
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search threads…"
+            placeholder="Filter threads…"
             className="h-8 w-full rounded-md border-b border-transparent bg-transparent pr-7 pl-8 text-sm outline-none placeholder:text-muted-foreground focus:border-sidebar-border"
           />
           {query && (
@@ -89,7 +93,7 @@ export function Sidebar({ onCollapse, onNavigate }: { onCollapse: () => void; on
         )}
         {!isLoading && groups.length === 0 && (
           <p className="px-3 pt-6 text-center text-xs text-muted-foreground">
-            {query ? "No threads match your search." : "No threads yet. Start one!"}
+            {query ? "No thread titles match. Press ⌘K to search messages too." : "No threads yet. Start one!"}
           </p>
         )}
         {groups.map((g) => (
@@ -108,5 +112,21 @@ export function Sidebar({ onCollapse, onNavigate }: { onCollapse: () => void; on
         <UserMenu />
       </div>
     </div>
+  );
+}
+
+function NavLink({ href, pathname, icon, label }: { href: string; pathname: string; icon: ReactNode; label: string }) {
+  const active = pathname === href || pathname.startsWith(`${href}/`);
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "flex h-8 items-center gap-2 rounded-md px-2.5 text-sm transition-colors",
+        active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground/85 hover:bg-sidebar-accent/60",
+      )}
+    >
+      {icon}
+      {label}
+    </Link>
   );
 }

@@ -3,7 +3,6 @@ export const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "im
 export type ImageMime = (typeof ALLOWED_IMAGE_TYPES)[number];
 
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-export const MAX_IMAGES_PER_MESSAGE = 5;
 
 export function sniffImageType(bytes: Uint8Array): ImageMime | null {
   if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {

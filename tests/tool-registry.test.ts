@@ -8,6 +8,8 @@ const flags: AgentFlags = {
   sandboxPythonEnabled: true,
   artifactsEnabled: true,
   inlineUiEnabled: true,
+  fetchUrlEnabled: true,
+  memoryEnabled: false,
   subagentsEnabled: false,
   subagentMaxConcurrent: 4,
   subagentModelCount: 0,

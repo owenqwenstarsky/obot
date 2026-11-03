@@ -13,6 +13,9 @@ export type AgentFlags = {
   sandboxPythonEnabled: boolean;
   artifactsEnabled: boolean;
   inlineUiEnabled: boolean;
+  fetchUrlEnabled: boolean;
+  /** Memory tools: the instance switch AND the user's own setting (resolved per run). */
+  memoryEnabled: boolean;
   subagentsEnabled: boolean;
   subagentMaxConcurrent: number;
   /** Number of models on the sub-agent allowlist. Delegation is unavailable when 0. */
@@ -37,6 +40,15 @@ export type ToolResult = {
 // ─── Services (bound to the current run; features provide implementations) ───
 
 export type SandboxExecResult = { stdout: string; stderr: string; exitCode: number };
+
+export interface MemoryApi {
+  add(content: string): Promise<{ id: string; content: string }>;
+  remove(id: string): Promise<{ content: string } | null>;
+}
+
+export interface WebApi {
+  fetch(url: string, signal: AbortSignal): Promise<import("@/server/web/fetch-url").FetchedPage>;
+}
 
 export interface SandboxApi {
   exec(command: string, opts: { timeoutMs: number; signal: AbortSignal }): Promise<SandboxExecResult>;
@@ -78,6 +90,8 @@ export interface SubagentToolApi {
 
 export interface ToolServices {
   sandbox?: SandboxApi;
+  web?: WebApi;
+  memories?: MemoryApi;
   artifacts?: ArtifactApi;
   tasks?: SubagentToolApi;
   steering: { onEnqueue(cb: () => void): () => void; hasPending(): boolean };
