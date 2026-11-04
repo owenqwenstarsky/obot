@@ -18,6 +18,7 @@ import type {
   WebSearchStatus,
 } from "@/lib/parts";
 import type { PartOp } from "@/lib/part-ops";
+import { resolveArgCitations } from "@/lib/citations";
 
 type Json = Record<string, unknown>;
 
@@ -139,6 +140,8 @@ export class ResponseStreamNormalizer {
   private error: string | null = null;
   private incompleteReason: string | null = null;
   private countedSearchItems = new Set<string>();
+  /** url_citation annotations attached to function-call items (offsets into the raw arguments). */
+  private argCitations = new Map<string, Citation[]>();
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -218,9 +221,16 @@ export class ResponseStreamNormalizer {
     return ops;
   }
 
-  private ensureText(itemId: string): number {
+  /**
+   * The text part for `itemId`, created if needed. Returns null when the id already belongs
+   * to a tool item: some upstreams attach text events (e.g. url_citation annotations) to
+   * function calls, and re-pointing the id at a new text part would orphan the call so it is
+   * never executed.
+   */
+  private ensureText(itemId: string): number | null {
     const existing = this.indexByItemId.get(itemId);
     if (existing != null && this.parts[existing]?.type === "text") return existing;
+    if (existing != null && this.parts[existing]?.type === "tool") return null;
     const part: TextPart = { type: "text", id: itemId, text: "", citations: [] };
     return this.add(itemId, part).index;
   }
@@ -255,6 +265,7 @@ export class ResponseStreamNormalizer {
         if (!itemId || !delta) return [];
         const created = !this.indexByItemId.has(itemId);
         const index = this.ensureText(itemId);
+        if (index == null) return [];
         const ops: PartOp[] = [];
         if (created) ops.push(...this.closeOpenReasoning(), { op: "upsert", index, part: this.parts[index] });
         const part = this.parts[index] as TextPart;
@@ -267,7 +278,15 @@ export class ResponseStreamNormalizer {
         const itemId = str(event.item_id);
         const citation = parseCitation(event.annotation);
         if (!itemId || !citation) return [];
+        const owner = this.indexByItemId.get(itemId);
+        const ownerPart = owner != null ? this.parts[owner] : undefined;
+        if (ownerPart?.type === "tool" && ownerPart.tool === "function") {
+          // Citations inside tool arguments: resolved into links when the call completes.
+          this.argCitations.set(itemId, [...(this.argCitations.get(itemId) ?? []), citation]);
+          return [];
+        }
         const index = this.ensureText(itemId);
+        if (index == null) return [];
         const part = this.parts[index] as TextPart;
         if (part.citations.some((c) => c.url === citation.url && c.start === citation.start)) return [];
         return [this.set(index, { ...part, citations: [...part.citations, citation] })];
@@ -278,6 +297,7 @@ export class ResponseStreamNormalizer {
         const text = str(event.text);
         if (!itemId || text == null) return [];
         const index = this.ensureText(itemId);
+        if (index == null) return [];
         const part = this.parts[index] as TextPart;
         if (part.text === text) return [];
         return [this.set(index, { ...part, text })];
@@ -288,6 +308,7 @@ export class ResponseStreamNormalizer {
         const delta = str(event.delta);
         if (!itemId || !delta) return [];
         const index = this.ensureText(itemId);
+        if (index == null) return [];
         const part = this.parts[index] as TextPart;
         this.parts[index] = { ...part, text: part.text + delta };
         return [{ op: "append_text", index, delta }];
@@ -528,7 +549,7 @@ export class ResponseStreamNormalizer {
       if ((action?.kind ?? part.actions[0]?.kind) === "search") this.countedSearchItems.add(id);
       ops.push(this.set(index, next));
     } else if (type === "function_call" && part?.type === "tool" && part.tool === "function") {
-      const args = str(item.arguments) ?? part.argsText;
+      const args = resolveArgCitations(str(item.arguments) ?? part.argsText, this.argCitations.get(id) ?? []);
       const callId = str(item.call_id) ?? part.callId;
       const name = str(item.name) ?? part.name;
       ops.push(this.set(index, { ...part, status: "pending", argsText: args, callId, name }));

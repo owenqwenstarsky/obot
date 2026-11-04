@@ -4,7 +4,7 @@ import { memo, useMemo, type ReactNode } from "react";
 import { Streamdown, type Components } from "streamdown";
 import { code } from "@streamdown/code";
 import type { TextPart } from "@/lib/parts";
-import { canonicalUrl, injectCitationLinks, stripCitationParens, uniqueSources } from "@/lib/citations";
+import { canonicalUrl, injectCitationLinks, stripCitationMarkers, stripCitationParens, uniqueSources } from "@/lib/citations";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Favicon, domainOf } from "./favicon";
 import { InlineUiRenderer } from "../inline-ui/inline-ui";
@@ -42,7 +42,7 @@ function CitationChip({ href, title, index }: { href: string; title?: string; in
 function TextBlockImpl({ part, streaming }: { part: TextPart; streaming: boolean }) {
   const sources = useMemo(() => uniqueSources(part.citations), [part.citations]);
   const markdown = useMemo(
-    () => stripCitationParens(injectCitationLinks(part.text, part.citations), part.citations),
+    () => stripCitationMarkers(stripCitationParens(injectCitationLinks(part.text, part.citations), part.citations)),
     [part.text, part.citations],
   );
 

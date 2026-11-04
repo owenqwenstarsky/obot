@@ -9,6 +9,7 @@ import { buildArtifactSrcDoc } from "@/lib/artifact-srcdoc";
 import { useMounted } from "@/hooks/use-mounted";
 import { InlineUiRenderer } from "@/components/chat/inline-ui/inline-ui";
 import { cn } from "@/lib/utils";
+import { stripCitationMarkers } from "@/lib/citations";
 
 const mdPlugins = { code, renderers: [{ language: "ui", component: InlineUiRenderer }] };
 
@@ -55,7 +56,7 @@ export function ArtifactFrame({ kind, content, className }: { kind: ArtifactKind
       <div className={cn("scrollbar-thin overflow-y-auto", className)}>
         <div className="prose-obot mx-auto max-w-3xl px-6 py-6">
           <Streamdown mode="static" plugins={mdPlugins} linkSafety={{ enabled: false }} shikiTheme={["github-light", "github-dark"]}>
-            {content}
+            {stripCitationMarkers(content)}
           </Streamdown>
         </div>
       </div>

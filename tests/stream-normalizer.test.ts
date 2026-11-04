@@ -255,4 +255,25 @@ describe("ResponseStreamNormalizer function calls", () => {
     ]);
     expect(snap.functionCalls.map((c) => c.callId)).toEqual(["c9"]);
   });
+
+  it("ignores text annotations attached to a function call item instead of orphaning the call", () => {
+    const fc = { type: "function_call", id: "fc_1", call_id: "call_1", name: "create_artifact", arguments: "" };
+    const annotation = { type: "url_citation", url: "https://example.com/a", title: "A", start_index: 10, end_index: 20 };
+    const { snap, clientParts, n } = run([
+      { type: "response.created", response: { id: "resp_fc" } },
+      { type: "response.output_item.added", output_index: 0, item: fc },
+      { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: '{"title":"T"' },
+      { type: "response.output_text.annotation.added", item_id: "fc_1", annotation },
+      { type: "response.output_text.done", item_id: "fc_1", text: "" },
+      { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: "}" },
+      { type: "response.function_call_arguments.done", item_id: "fc_1", arguments: '{"title":"T"}' },
+      { type: "response.output_item.done", output_index: 0, item: { ...fc, arguments: '{"title":"T"}' } },
+      { type: "response.completed", response: { id: "resp_fc", usage } },
+    ]);
+    expect(snap.parts).toHaveLength(1);
+    expect(snap.parts[0]).toMatchObject({ type: "tool", tool: "function", status: "pending", argsText: '{"title":"T"}' });
+    expect(snap.functionCalls).toEqual([{ itemId: "fc_1", callId: "call_1", name: "create_artifact", arguments: '{"title":"T"}', partIndex: 0 }]);
+    expect(n.finalizeOpenParts()).toEqual([]);
+    expect(clientParts).toEqual(snap.parts);
+  });
 });
