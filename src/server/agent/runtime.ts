@@ -7,7 +7,7 @@ import { RunManager, type RunFinish, type RunHandle, type StartRunParams } from 
 import type { ToolServices } from "@/server/agent/tools/types";
 import { checkCanRun, recordUsage } from "@/server/billing/usage";
 import type { StreamEvent } from "@/server/llm/stream-normalizer";
-import { emptyUsage, type ContextSnapshot } from "@/lib/parts";
+import { emptyUsage, partsToSearchText, type ContextSnapshot, type MessagePart } from "@/lib/parts";
 
 const json = (v: unknown) => v as unknown as Prisma.InputJsonValue;
 
@@ -57,7 +57,11 @@ function createManager() {
     saveProgress: async (messageId, parts, transcript) => {
       await db.message.updateMany({
         where: { id: messageId, status: "STREAMING" },
-        data: { parts: json(parts), ...(transcript ? { rawOutput: json(transcript) } : {}) },
+        data: {
+          parts: json(parts),
+          searchText: partsToSearchText(parts as MessagePart[]),
+          ...(transcript ? { rawOutput: json(transcript) } : {}),
+        },
       });
     },
     recordStep: async (s) => {
@@ -87,6 +91,7 @@ function createManager() {
         where: { id: r.messageId },
         data: {
           parts: json(r.parts),
+          searchText: partsToSearchText(r.parts as MessagePart[]),
           rawOutput: json(r.rawOutput),
           status: r.messageStatus,
           error: r.error,
@@ -97,7 +102,8 @@ function createManager() {
         where: { id: r.runId },
         data: { status: r.runStatus, error: r.error, endedAt: new Date(), steps: r.steps },
       });
-      if (r.contextUsage) {
+      // Side-by-side comparison replies don't own the thread's context meter.
+      if (r.contextUsage && r.meta.compareSecondary !== true) {
         const ctx: ContextSnapshot = { ...r.contextUsage, modelId: r.modelId, at: new Date().toISOString() };
         await db.thread.update({ where: { id: r.threadId }, data: { lastContext: json(ctx) } });
       }

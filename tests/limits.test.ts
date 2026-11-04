@@ -112,3 +112,26 @@ describe("evaluateUnpriced", () => {
     expect(evaluateUnpriced("FREE", limited, false).allowed).toBe(true);
   });
 });
+
+describe("spendAlertLevel", () => {
+  it("warns at 80% and reports reaching the cap", async () => {
+    const { spendAlertLevel } = await import("@/server/billing/limits");
+    expect(spendAlertLevel(0n, null)).toBeNull();
+    expect(spendAlertLevel(79n, 100n)).toBeNull();
+    expect(spendAlertLevel(80n, 100n)).toBe("warning");
+    expect(spendAlertLevel(99, 100)).toBe("warning");
+    expect(spendAlertLevel(100n, 100n)).toBe("reached");
+    expect(spendAlertLevel(150, 100)).toBe("reached");
+    expect(spendAlertLevel(0n, 0n)).toBe("reached");
+  });
+
+  it("only notifies when the level rises within a period", async () => {
+    const { shouldNotify, alertStorageKey } = await import("@/lib/spend-alerts");
+    expect(shouldNotify(null, null)).toBe(false);
+    expect(shouldNotify(null, "warning")).toBe(true);
+    expect(shouldNotify("warning", "warning")).toBe(false);
+    expect(shouldNotify("warning", "reached")).toBe(true);
+    expect(shouldNotify("reached", "warning")).toBe(false);
+    expect(alertStorageKey("weekly", "2026-11-09T00:00:00.000Z")).toBe("obot:spend-alert:weekly:2026-11-09T00:00:00.000Z");
+  });
+});

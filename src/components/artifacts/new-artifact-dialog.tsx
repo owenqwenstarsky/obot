@@ -66,7 +66,7 @@ export function NewArtifactDialog({ open, onOpenChange }: { open: boolean; onOpe
         qc.setQueryData<ClientArtifact[]>(["artifacts"], (old) => [summary, ...(old ?? []).filter((a) => a.id !== summary.id)]);
       }
       qc.setQueryData<ThreadListItem[]>(["threads"], (old) => [
-        { ...res.thread, running: true, children: [] },
+        { ...res.thread, running: true, children: [], project: null },
         ...(old ?? []).filter((t) => t.id !== res.thread.id),
       ]);
       toast.success("Generating your artifact", { description: "It'll appear here when it's ready." });

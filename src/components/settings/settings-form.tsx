@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Brain } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
@@ -16,13 +18,22 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 
 type MeSettings = {
   webSearchDefault: boolean | null;
   defaultModelId: string | null;
   defaultEffort: string | null;
+  aboutMe: string | null;
+  responseStyle: string | null;
+  memoryEnabled: boolean;
+  memoryCount: number;
   instanceWebSearchDefault: boolean;
+  instanceMemoryEnabled: boolean;
 };
+
+type MePatch = Partial<Omit<MeSettings, "instanceWebSearchDefault" | "instanceMemoryEnabled" | "memoryCount">> & { name?: string };
 
 export function SettingsForm() {
   const user = useShellUser();
@@ -33,9 +44,22 @@ export function SettingsForm() {
   const { data } = useQuery({ queryKey: ["me-settings"], queryFn: () => api<MeSettings>("/api/me/settings") });
   const { data: modelsData } = useModels();
   const [name, setName] = useState(user.name);
+  const [aboutMe, setAboutMe] = useState("");
+  const [responseStyle, setResponseStyle] = useState("");
+  const [seeded, setSeeded] = useState(false);
+
+  useEffect(() => {
+    if (!data || seeded) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- seed editable fields once from loaded settings
+    setAboutMe(data.aboutMe ?? "");
+    setResponseStyle(data.responseStyle ?? "");
+    setSeeded(true);
+  }, [data, seeded]);
+
+  const instructionsDirty = !!data && (aboutMe.trim() !== (data.aboutMe ?? "") || responseStyle.trim() !== (data.responseStyle ?? ""));
 
   const save = useMutation({
-    mutationFn: (patch: Partial<Omit<MeSettings, "instanceWebSearchDefault">> & { name?: string }) =>
+    mutationFn: (patch: MePatch) =>
       api("/api/me/settings", { method: "PATCH", json: patch }),
     onSuccess: () => {
       toast.success("Saved");
@@ -127,6 +151,78 @@ export function SettingsForm() {
               </SelectContent>
             </Select>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Custom instructions</CardTitle>
+          <CardDescription>Included in every thread so the agent knows who you are and how you like answers.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="about-me">About you</Label>
+            <Textarea
+              id="about-me"
+              value={aboutMe}
+              onChange={(e) => setAboutMe(e.target.value)}
+              maxLength={4000}
+              rows={4}
+              placeholder="e.g. I'm a backend engineer working mostly in Go and Postgres. I live in Berlin."
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="response-style">How should the agent respond?</Label>
+            <Textarea
+              id="response-style"
+              value={responseStyle}
+              onChange={(e) => setResponseStyle(e.target.value)}
+              maxLength={4000}
+              rows={4}
+              placeholder="e.g. Be concise. Use metric units. Show code before explanations."
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button
+              disabled={!instructionsDirty || save.isPending}
+              onClick={() => save.mutate({ aboutMe: aboutMe.trim() || null, responseStyle: responseStyle.trim() || null })}
+            >
+              Save instructions
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Memory</CardTitle>
+          <CardDescription>
+            Let the agent remember useful facts about you across threads. You can review, edit, or delete everything it saves.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {data && !data.instanceMemoryEnabled ? (
+            <p className="text-sm text-muted-foreground">Memory is turned off on this instance by an admin.</p>
+          ) : (
+            <label className="flex items-center justify-between gap-4 text-sm">
+              <span>
+                <span className="font-medium">Use memory</span>
+                <span className="block text-xs text-muted-foreground">
+                  When on, the agent can save memories and sees them in new replies. Turning it off keeps saved memories but stops using them.
+                </span>
+              </span>
+              <Switch
+                checked={!!data?.memoryEnabled}
+                disabled={!data}
+                onCheckedChange={(v) => save.mutate({ memoryEnabled: v })}
+              />
+            </label>
+          )}
+          <Button asChild variant="outline" size="sm">
+            <Link href="/memories">
+              <Brain /> Manage memories{data ? ` (${data.memoryCount})` : ""}
+            </Link>
+          </Button>
         </CardContent>
       </Card>
 

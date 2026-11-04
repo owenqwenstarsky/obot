@@ -32,6 +32,9 @@ type Settings = {
   sandboxPythonEnabled: boolean;
   inlineUiEnabled: boolean;
   artifactsEnabled: boolean;
+  fetchUrlEnabled: boolean;
+  memoryEnabled: boolean;
+  sharingEnabled: boolean;
 };
 
 type Form = {
@@ -50,6 +53,9 @@ type Form = {
   sandboxPythonEnabled: boolean;
   inlineUiEnabled: boolean;
   artifactsEnabled: boolean;
+  fetchUrlEnabled: boolean;
+  memoryEnabled: boolean;
+  sharingEnabled: boolean;
 };
 
 function toForm(s: Settings): Form {
@@ -69,6 +75,9 @@ function toForm(s: Settings): Form {
     sandboxPythonEnabled: s.sandboxPythonEnabled,
     inlineUiEnabled: s.inlineUiEnabled,
     artifactsEnabled: s.artifactsEnabled,
+    fetchUrlEnabled: s.fetchUrlEnabled,
+    memoryEnabled: s.memoryEnabled,
+    sharingEnabled: s.sharingEnabled,
   };
 }
 
@@ -112,6 +121,9 @@ export function AdminSettings() {
           sandboxPythonEnabled: f.sandboxPythonEnabled,
           inlineUiEnabled: f.inlineUiEnabled,
           artifactsEnabled: f.artifactsEnabled,
+          fetchUrlEnabled: f.fetchUrlEnabled,
+          memoryEnabled: f.memoryEnabled,
+          sharingEnabled: f.sharingEnabled,
         },
       });
     },
@@ -297,6 +309,36 @@ export function AdminSettings() {
               </span>
             </span>
             <Switch checked={form.artifactsEnabled} onCheckedChange={(v) => set("artifactsEnabled", v)} />
+          </label>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Read web pages (fetch_url)</span>
+              <span className="block text-xs text-muted-foreground">
+                Lets the agent open a URL and read it as text (HTML, PDF, plain text). Requests come from this server; private and
+                internal addresses are always blocked.
+              </span>
+            </span>
+            <Switch checked={form.fetchUrlEnabled} onCheckedChange={(v) => set("fetchUrlEnabled", v)} />
+          </label>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Public share links</span>
+              <span className="block text-xs text-muted-foreground">
+                Lets people create read-only links to a snapshot of a thread that anyone with the link can open without signing in.
+                Turning this off disables every existing link immediately.
+              </span>
+            </span>
+            <Switch checked={form.sharingEnabled} onCheckedChange={(v) => set("sharingEnabled", v)} />
+          </label>
+          <label className="flex items-center justify-between gap-4 text-sm">
+            <span>
+              <span className="font-medium">Memory</span>
+              <span className="block text-xs text-muted-foreground">
+                Lets people turn on memory in their settings, so the agent can save facts about them and use them in later threads.
+                Off here disables it for everyone (saved memories are kept).
+              </span>
+            </span>
+            <Switch checked={form.memoryEnabled} onCheckedChange={(v) => set("memoryEnabled", v)} />
           </label>
           <label className="flex items-center justify-between gap-4 text-sm">
             <span>

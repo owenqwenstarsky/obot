@@ -7,6 +7,7 @@ import type { AllowedEffort } from "@/lib/efforts";
 import {
   isStoredTranscript,
   replayTranscript,
+  truncateMiddle,
   type InputContent,
   type InputItem,
 } from "@/server/llm/transcript";
@@ -36,6 +37,12 @@ export type WebSearchToolSpec = {
 
 export type ImageResolver = (attachmentId: string) => string | null;
 
+export type ResolvedDocument = { fileName: string; text: string };
+export type DocumentResolver = (attachmentId: string) => ResolvedDocument | null;
+
+/** Max characters of one document's text sent to the model (head + tail are kept). */
+export const DOCUMENT_PROMPT_CHARS = 50_000;
+
 export type WebSearchConfig = {
   enabled: boolean;
   contextSize: "low" | "medium" | "high";
@@ -47,6 +54,7 @@ export type BuildRequestArgs = {
   effort: AllowedEffort | null;
   history: HistoryMessage[];
   resolveImage: ImageResolver;
+  resolveDocument?: DocumentResolver;
   webSearch: WebSearchConfig;
   systemPrompt?: string | null;
   supportsReasoning: boolean;
@@ -67,7 +75,37 @@ export type ResponsesRequestBody = {
   store: false;
 };
 
-export function buildInput(history: HistoryMessage[], resolveImage: ImageResolver): InputItem[] {
+const escapeAttr = (v: string) => v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/\n/g, " ");
+
+/** The text block a document attachment becomes in the model input. Pure. */
+export function documentInputText(
+  part: { fileName: string; sandboxPath?: string; chars?: number },
+  doc: ResolvedDocument | null,
+): string {
+  const attrs = [`name="${escapeAttr(part.fileName)}"`];
+  if (part.sandboxPath) attrs.push(`sandbox_path="${escapeAttr(part.sandboxPath)}"`);
+  if (!doc) return `<document ${attrs.join(" ")}>\n[This file was attached but is no longer available.]\n</document>`;
+  const text = doc.text;
+  if (!text.trim()) {
+    return `<document ${attrs.join(" ")}>\n[No text could be extracted from this file (it may be scanned or image-only).]\n</document>`;
+  }
+  let body = text;
+  let note = "";
+  if (text.length > DOCUMENT_PROMPT_CHARS) {
+    body = truncateMiddle(text, DOCUMENT_PROMPT_CHARS);
+    attrs.push(`truncated="true"`, `total_chars="${text.length}"`);
+    note = part.sandboxPath
+      ? `\n[Only part of this file is shown. The full file is at ${part.sandboxPath} in the sandbox.]`
+      : "\n[Only part of this file is shown.]";
+  }
+  return `<document ${attrs.join(" ")}>\n${body}${note}\n</document>`;
+}
+
+export function buildInput(
+  history: HistoryMessage[],
+  resolveImage: ImageResolver,
+  resolveDocument: DocumentResolver = () => null,
+): InputItem[] {
   const items: InputItem[] = [];
   for (const msg of history) {
     if (msg.role === "USER") {
@@ -78,6 +116,9 @@ export function buildInput(history: HistoryMessage[], resolveImage: ImageResolve
           const url = resolveImage(p.attachmentId);
           if (url) content.push({ type: "input_image", image_url: url, detail: "auto" });
           else content.push({ type: "input_text", text: "[An image was attached here but is no longer available.]" });
+        }
+        if (p.type === "user_file") {
+          content.push({ type: "input_text", text: documentInputText(p, resolveDocument(p.attachmentId)) });
         }
       }
       if (content.length > 0) items.push({ role: "user", content });
@@ -127,7 +168,7 @@ export function normalizeDomains(domains: string[]): string[] {
 export function buildResponsesRequest(args: BuildRequestArgs): ResponsesRequestBody {
   const body: ResponsesRequestBody = {
     model: args.model,
-    input: buildInput(args.history, args.resolveImage),
+    input: buildInput(args.history, args.resolveImage, args.resolveDocument),
     stream: true,
     store: false,
   };

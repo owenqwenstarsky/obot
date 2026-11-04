@@ -5,6 +5,8 @@ import { PanelLeft, SquarePen } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/app/sidebar";
+import { CommandPalette } from "@/components/app/command-palette";
+import { SpendAlerts } from "@/components/app/spend-alerts";
 import { UserContext, type ShellUser } from "@/components/app/user-context";
 import { SidebarCollapsedContext } from "@/components/app/sidebar-state";
 import { Button } from "@/components/ui/button";
@@ -102,6 +104,8 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
           <SidebarCollapsedContext value={collapsed}>{children}</SidebarCollapsedContext>
         </main>
       </div>
+      <CommandPalette />
+      <SpendAlerts />
     </UserContext>
   );
 }

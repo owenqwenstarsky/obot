@@ -11,6 +11,7 @@ import { useModels } from "@/hooks/queries";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useChatTasks } from "../tasks-context";
+import { useMessageView } from "../view-context";
 import { isToolLive } from "./function-tool-part";
 
 const STATUS: Record<SubagentTaskStatusValue, { label: string; className: string; icon: React.ComponentType<{ className?: string }> }> = {
@@ -41,7 +42,8 @@ function elapsed(ms: number) {
 /** Live card for one delegated sub-agent task. */
 export function DelegateCard({ part }: { part: FunctionToolPart }) {
   const tasksApi = useChatTasks();
-  const { data: modelsData } = useModels();
+  const { readOnly } = useMessageView();
+  const { data: modelsData } = useModels(!readOnly);
   const display = part.display?.kind === "subagent" ? part.display : null;
   const task = display ? tasksApi?.tasks.get(display.taskId) : undefined;
   const status: SubagentTaskStatusValue | null = task?.status ?? display?.status ?? null;
@@ -64,7 +66,7 @@ export function DelegateCard({ part }: { part: FunctionToolPart }) {
         {starting ? <Loader2 className="size-4 animate-spin text-primary" /> : <Bot className="size-4 text-muted-foreground" />}
       </span>
       <div className="min-w-0 flex-1">
-        {display ? (
+        {display && !readOnly ? (
           <Link href={`/t/${display.childThreadId}`} className="block truncate text-sm font-medium hover:underline">
             {title}
           </Link>

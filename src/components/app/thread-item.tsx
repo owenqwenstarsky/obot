@@ -4,16 +4,19 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronRight, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Folder, FolderInput, FolderMinus, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "@/lib/api";
-import type { ThreadListItem } from "@/hooks/queries";
+import { useProjects, type ThreadListItem } from "@/hooks/queries";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -88,6 +91,8 @@ export function ThreadItem({ thread, active, activeId }: { thread: ThreadListIte
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState(thread.title);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const { data: projects } = useProjects(menuOpen);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -101,6 +106,25 @@ export function ThreadItem({ thread, active, activeId }: { thread: ThreadListIte
       qc.setQueryData<ThreadListItem[]>(["threads"], (old) =>
         old?.map((t) => (t.id === thread.id ? { ...t, ...body } : t)),
       );
+    },
+    onError: (err) => {
+      toast.error(errorMessage(err));
+      void qc.invalidateQueries({ queryKey: ["threads"] });
+    },
+  });
+
+  const move = useMutation({
+    mutationFn: (projectId: string | null) => api(`/api/threads/${thread.id}`, { method: "PATCH", json: { projectId } }),
+    onMutate: (projectId) => {
+      const project = projectId ? (projects?.find((p) => p.id === projectId) ?? null) : null;
+      qc.setQueryData<ThreadListItem[]>(["threads"], (old) =>
+        old?.map((t) => (t.id === thread.id ? { ...t, projectId, project: project ? { id: project.id, name: project.name } : null } : t)),
+      );
+    },
+    onSuccess: (_d, projectId) => {
+      toast.success(projectId ? "Moved to project" : "Removed from project");
+      void qc.invalidateQueries({ queryKey: ["projects"] });
+      void qc.invalidateQueries({ queryKey: ["project"] });
     },
     onError: (err) => {
       toast.error(errorMessage(err));
@@ -167,6 +191,11 @@ export function ThreadItem({ thread, active, activeId }: { thread: ThreadListIte
             </span>
           )}
           <span className="truncate">{thread.title}</span>
+          {thread.project && (
+            <Folder className="ml-auto size-3 shrink-0 text-muted-foreground/70" aria-label={`In project ${thread.project.name}`}>
+              <title>{thread.project.name}</title>
+            </Folder>
+          )}
         </Link>
       )}
 
@@ -214,7 +243,7 @@ export function ThreadItem({ thread, active, activeId }: { thread: ThreadListIte
       )}
 
       {!renaming && (
-        <DropdownMenu>
+        <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger
             className={cn(
               "absolute top-1 right-1 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background/60 hover:text-foreground group-hover/thread:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 pointer-coarse:opacity-100",
@@ -223,7 +252,7 @@ export function ThreadItem({ thread, active, activeId }: { thread: ThreadListIte
           >
             <MoreHorizontal className="size-4" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" side="right" className="w-40">
+          <DropdownMenuContent align="start" side="right" className="w-48">
             <DropdownMenuItem onSelect={startRename}>
               <Pencil /> Rename
             </DropdownMenuItem>
@@ -238,6 +267,35 @@ export function ThreadItem({ thread, active, activeId }: { thread: ThreadListIte
                 </>
               )}
             </DropdownMenuItem>
+            {thread.kind === "CHAT" && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <FolderInput /> Move to project
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="max-h-72 w-52 overflow-y-auto">
+                  {projects === undefined && <DropdownMenuItem disabled>Loading…</DropdownMenuItem>}
+                  {projects?.length === 0 && (
+                    <DropdownMenuItem asChild>
+                      <Link href="/projects">Create a project…</Link>
+                    </DropdownMenuItem>
+                  )}
+                  {projects?.map((p) => (
+                    <DropdownMenuItem key={p.id} disabled={p.id === thread.projectId} onSelect={() => move.mutate(p.id)}>
+                      <Folder /> <span className="truncate">{p.name}</span>
+                      {p.id === thread.projectId && <Check className="ml-auto" />}
+                    </DropdownMenuItem>
+                  ))}
+                  {thread.projectId && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => move.mutate(null)}>
+                        <FolderMinus /> Remove from project
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDelete(true)}>
               <Trash2 /> Delete

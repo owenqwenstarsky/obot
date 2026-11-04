@@ -10,10 +10,12 @@ import { KIND_LABEL, KindIcon } from "@/components/artifacts/artifact-kind";
 import type { ArtifactKindName } from "@/components/artifacts/artifact-frame";
 import { cn } from "@/lib/utils";
 import { isToolLive } from "./function-tool-part";
+import { useMessageView } from "../view-context";
 
 /** Card for create_artifact / update_artifact; opens the artifact in the side panel. */
 export function ArtifactCard({ part }: { part: FunctionToolPart }) {
   const panel = useArtifactPanel();
+  const { readOnly } = useMessageView();
   const live = isToolLive(part);
   const display = part.display?.kind === "artifact" ? part.display : null;
   const streamed = useMemo(() => {
@@ -66,7 +68,7 @@ export function ArtifactCard({ part }: { part: FunctionToolPart }) {
   const className =
     "group/art flex w-full max-w-md items-center gap-3 rounded-xl border bg-card px-3 py-2.5 text-left shadow-xs transition-colors";
 
-  if (!display) return <div className={className}>{body}</div>;
+  if (!display || readOnly) return <div className={className}>{body}</div>;
   if (panel) {
     return (
       <button

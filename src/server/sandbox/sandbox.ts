@@ -52,6 +52,17 @@ export function normalizeSandboxPath(p: string): string {
   return norm.length > 1 && norm.endsWith("/") ? norm.slice(0, -1) : norm;
 }
 
+function uniqueName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  for (let i = 1; ; i++) {
+    const candidate = `${stem}-${i}${ext}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 export class SandboxService {
   private live = new Map<string, Live>();
   private pending = new Map<string, Promise<Live>>();
@@ -232,14 +243,50 @@ export class SandboxService {
     });
   }
 
-  async writeFile(id: string, filePath: string, content: string): Promise<{ path: string; bytes: number }> {
+  async writeFile(id: string, filePath: string, content: string | Uint8Array): Promise<{ path: string; bytes: number }> {
     const p = normalizeSandboxPath(filePath);
     if (!isUserPath(p)) throw new Error(`Can't write to ${p}.`);
     return this.withLock(id, async (l) => {
       await l.fs.mkdir(path.posix.dirname(p), { recursive: true });
-      await l.fs.writeFile(p, content);
+      await l.fs.writeFile(p, typeof content === "string" ? content : Buffer.from(content));
       await this.persistIfChanged(id, l);
-      return { path: p, bytes: Buffer.byteLength(content) };
+      return { path: p, bytes: typeof content === "string" ? Buffer.byteLength(content) : content.byteLength };
+    });
+  }
+
+  /**
+   * Copy several files into `dir` in one locked step. `mode: "unique"` renames on collision
+   * (`a.txt` → `a-1.txt`); `"skip-existing"` leaves an existing file alone. Returns each
+   * file's sandbox path, in order. `name` must be a bare, already-sanitized file name.
+   */
+  async addFiles(
+    id: string,
+    dir: string,
+    files: { name: string; bytes: Uint8Array }[],
+    mode: "unique" | "skip-existing",
+  ): Promise<string[]> {
+    const base = normalizeSandboxPath(dir);
+    if (!isUserPath(base)) throw new Error(`Can't write to ${base}.`);
+    return this.withLock(id, async (l) => {
+      await l.fs.mkdir(base, { recursive: true });
+      const taken = new Set<string>();
+      for (const p of l.fs.getAllPaths()) {
+        if (path.posix.dirname(p) === base) taken.add(path.posix.basename(p));
+      }
+      const out: string[] = [];
+      for (const f of files) {
+        const name = path.posix.basename(f.name) || "file";
+        if (mode === "skip-existing" && taken.has(name)) {
+          out.push(`${base}/${name}`);
+          continue;
+        }
+        const finalName = mode === "unique" ? uniqueName(name, taken) : name;
+        taken.add(finalName);
+        await l.fs.writeFile(`${base}/${finalName}`, Buffer.from(f.bytes));
+        out.push(`${base}/${finalName}`);
+      }
+      await this.persistIfChanged(id, l);
+      return out;
     });
   }
 

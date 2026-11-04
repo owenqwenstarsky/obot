@@ -9,11 +9,11 @@ import { ChatView } from "./chat-view";
  * stream isn't interrupted. When the user navigates back to "/", bump a generation key so
  * a fresh, empty ChatView mounts.
  */
-export function NewThreadView() {
+export function NewThreadView({ projectId = null }: { projectId?: string | null }) {
   const pathname = usePathname();
   const [state, setState] = useState({ path: pathname, gen: 0 });
   if (state.path !== pathname) {
     setState({ path: pathname, gen: pathname === "/" ? state.gen + 1 : state.gen });
   }
-  return <ChatView key={state.gen} threadId={null} />;
+  return <ChatView key={`${state.gen}:${projectId ?? ""}`} threadId={null} projectId={projectId} />;
 }

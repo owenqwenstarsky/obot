@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { BarChart3, ChevronsUpDown, LogOut, Monitor, Moon, Settings, Shield, Sun } from "lucide-react";
+import { BarChart3, Brain, ChevronsUpDown, LogOut, Monitor, Moon, Settings, Shield, Sun } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
 import { useShellUser } from "@/components/app/user-context";
@@ -63,6 +63,11 @@ export function UserMenu() {
         <DropdownMenuItem asChild>
           <Link href="/usage">
             <BarChart3 /> Usage
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/memories">
+            <Brain /> Memories
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>

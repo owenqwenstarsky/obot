@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getSessionCookie } from "better-auth/cookies";
 
-const PUBLIC_PATHS = ["/login", "/register", "/invite"];
+const PUBLIC_PATHS = ["/login", "/register", "/invite", "/share"];
 
 /** Optimistic redirect for signed-out visitors. Real auth checks happen in every route/page. */
 export function proxy(request: NextRequest) {

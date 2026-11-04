@@ -2,20 +2,25 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowDown, Bot, CornerLeftUp, Loader2, Square } from "lucide-react";
+import { ArrowDown, Bot, Columns2, CornerLeftUp, FolderOpen, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
 import { useChat, type TurnSettings } from "@/hooks/use-chat";
-import { useModels } from "@/hooks/queries";
+import { useLimits, useModels, useProject } from "@/hooks/queries";
+import { worstWindow } from "@/components/app/spend-alerts";
+import { formatUsd } from "@/lib/money";
 import { ApiError, errorMessage } from "@/lib/api";
 import { resolveEffort, type AllowedEffort } from "@/lib/efforts";
 import { useShellUser } from "@/components/app/user-context";
-import { Composer } from "./composer";
+import { Composer, type ComposerSubmit } from "./composer";
 import { AssistantMessage, UserMessage } from "./message";
 import { SandboxFiles } from "./sandbox-files";
+import { ShareMenu } from "./share-menu";
 import { ArtifactPanelHost } from "@/components/artifacts/artifact-panel";
 import { ChatTasksContext } from "./tasks-context";
 import { Button } from "@/components/ui/button";
 import type { CatalogModel } from "@/server/llm/catalog";
+import { branchInfo, compareGroup } from "@/lib/branches";
+import { cn } from "@/lib/utils";
 
 const LAST_SELECTION_KEY = "obot:last-selection";
 
@@ -32,38 +37,54 @@ function effortFor(model: CatalogModel | undefined, wanted: string | null | unde
   return resolveEffort(wanted, model.efforts, (model.defaultEffort ?? undefined) as AllowedEffort | undefined);
 }
 
-export function ChatView({ threadId: initialThreadId }: { threadId: string | null }) {
+export function ChatView({
+  threadId: initialThreadId,
+  projectId: newThreadProjectId = null,
+  focusMessageId = null,
+}: {
+  threadId: string | null;
+  /** For a new thread: start it inside this project. */
+  projectId?: string | null;
+  /** Scroll to (and if needed switch to the branch containing) this message, e.g. from search. */
+  focusMessageId?: string | null;
+}) {
   const user = useShellUser();
-  const chat = useChat(initialThreadId);
+  const chat = useChat(initialThreadId, { projectId: newThreadProjectId });
+  const projectId = chat.meta?.projectId ?? (initialThreadId ? null : newThreadProjectId);
+  const { data: project, isLoading: projectLoading } = useProject(projectId);
   const { data: modelsData, isLoading: modelsLoading } = useModels();
   const models = useMemo(() => modelsData?.models ?? [], [modelsData]);
 
   const [modelId, setModelId] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const [webSearch, setWebSearch] = useState(false);
+  const [compare, setCompare] = useState<{ modelId: string; effort: string | null } | null>(null);
   const initialized = useRef(false);
 
   // Initialize the selection once models (and the thread, if any) are loaded.
   useEffect(() => {
-    if (initialized.current || !modelsData || chat.loading) return;
+    if (initialized.current || !modelsData || chat.loading || (projectId && projectLoading)) return;
     initialized.current = true;
     const last = readLastSelection();
     const byId = (id?: string | null) => (id ? models.find((m) => m.id === id) : undefined);
     const fromThread = byId(chat.meta?.lastModelId);
-    // Priority: this thread's last model → explicit user default → last used anywhere → first model.
+    const fromProject = byId(project?.defaultModelId);
+    // Priority: this thread's last model → project default → explicit user default → last used anywhere → first model.
     const preferred = byId(modelsData.defaults.modelId);
-    const model = fromThread ?? preferred ?? byId(last.modelId) ?? models[0];
+    const model = fromThread ?? fromProject ?? preferred ?? byId(last.modelId) ?? models[0];
     const wantedEffort = fromThread
       ? chat.meta?.lastEffort
-      : preferred && preferred.id === model?.id
-        ? modelsData.defaults.effort
-        : last.modelId === model?.id
-          ? last.effort
-          : null;
+      : fromProject
+        ? project?.defaultEffort
+        : preferred && preferred.id === model?.id
+          ? modelsData.defaults.effort
+          : last.modelId === model?.id
+            ? last.effort
+            : null;
     setModelId(model?.id ?? null);
     setEffort(effortFor(model, wantedEffort));
-    setWebSearch(chat.meta?.webSearchEnabled ?? modelsData.defaults.webSearch);
-  }, [modelsData, models, chat.loading, chat.meta]);
+    setWebSearch(chat.meta?.webSearchEnabled ?? project?.webSearchDefault ?? modelsData.defaults.webSearch);
+  }, [modelsData, models, chat.loading, chat.meta, projectId, projectLoading, project]);
 
   const onModelChange = useCallback(
     (id: string, e: string | null) => {
@@ -106,8 +127,34 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
   }, [chat.messages, scrollToBottom]);
 
   useEffect(() => {
-    if (!chat.loading) scrollToBottom();
-  }, [chat.loading, scrollToBottom]);
+    if (!chat.loading && !focusMessageId) scrollToBottom();
+  }, [chat.loading, scrollToBottom, focusMessageId]);
+
+  // Jump to a message from search: switch to its branch if needed, then scroll and flash it.
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const focusDone = useRef(false);
+  const { loading: chatLoading, allMessages: everyMessage, messages: visibleMessages, switchBranch: switchTo, threadId: currentThreadId } = chat;
+  useEffect(() => {
+    if (!focusMessageId || focusDone.current || chatLoading) return;
+    if (!everyMessage.some((m) => m.id === focusMessageId)) {
+      focusDone.current = true;
+      return;
+    }
+    if (!visibleMessages.some((m) => m.id === focusMessageId)) {
+      void switchTo(focusMessageId).catch(() => undefined);
+      return;
+    }
+    focusDone.current = true;
+    stickToBottom.current = false;
+    requestAnimationFrame(() => {
+      document.getElementById(`msg-${focusMessageId}`)?.scrollIntoView({ block: "center" });
+    });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- brief highlight after navigation
+    setHighlightId(focusMessageId);
+    // Not cleared on re-render: the effect won't run again for this focus (focusDone), so the timer must survive.
+    setTimeout(() => setHighlightId(null), 2500);
+    window.history.replaceState(null, "", `/t/${currentThreadId}`);
+  }, [focusMessageId, chatLoading, everyMessage, visibleMessages, switchTo, currentThreadId]);
 
   function onScroll() {
     const el = scrollRef.current;
@@ -124,17 +171,51 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
     [chatTasks, cancelTask],
   );
   const isSubagent = chat.meta?.kind === "SUBAGENT";
+  const { data: limits } = useLimits();
+  const tight = worstWindow(limits);
+  const spendNotice = tight ? (
+    <span className={tight.alert === "reached" ? "text-destructive" : "text-amber-600 dark:text-amber-400"}>
+      {tight.alert === "reached"
+        ? `${tight.window === "weekly" ? "Weekly" : "Monthly"} spend limit reached (${formatUsd(tight.spentMicros)} of ${formatUsd(tight.limitMicros!)}). `
+        : `${Math.floor((tight.spentMicros / tight.limitMicros!) * 100)}% of your ${tight.window} limit used: ${formatUsd(tight.limitMicros! - tight.spentMicros)} left. `}
+      <Link href="/usage" className="underline-offset-2 hover:underline">
+        See usage
+      </Link>
+    </span>
+  ) : null;
   const childTask = chat.meta?.task ?? null;
   const lastAssistantId = [...chat.messages].reverse().find((m) => m.role === "ASSISTANT")?.id;
+  const { allMessages, switchBranch } = chat;
+  const branches = useMemo(() => new Map(chat.messages.map((m) => [m.id, branchInfo(allMessages, m)])), [allMessages, chat.messages]);
+  /** Assistant messages on the path that are part of a side-by-side comparison → all replies in the group. */
+  const compareGroups = useMemo(() => {
+    const out = new Map<string, typeof allMessages>();
+    for (const m of chat.messages) {
+      if (m.role !== "ASSISTANT" || !m.compareGroupId) continue;
+      const group = compareGroup(allMessages, m);
+      if (group.length > 1) out.set(m.id, group);
+    }
+    return out;
+  }, [allMessages, chat.messages]);
+  const onSwitchBranch = useCallback(
+    (id: string) => {
+      void switchBranch(id).catch((err) => toast.error(errorMessage(err)));
+    },
+    [switchBranch],
+  );
 
   /** Send as a new turn; if the previous run is still wrapping up, retry briefly. */
-  async function sendTurn(input: { text: string; attachments: { id: string; mime: string }[] }) {
+  async function sendTurn(input: ComposerSubmit) {
     const s = settings();
     if (!s) throw new Error("Pick a model first.");
     stickToBottom.current = true;
+    const versus = compare && !chat.running ? { modelId: compare.modelId, effort: compare.effort } : null;
     for (let attempt = 0; ; attempt++) {
       try {
-        return await chat.send({ ...input, ...s });
+        const ok = await chat.send({ ...input, ...s, compare: versus });
+        // A comparison is a one-off: the next message goes to the selected model only.
+        if (versus) setCompare(null);
+        return ok;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409 && attempt < 10) {
           await new Promise((r) => setTimeout(r, 500));
@@ -145,7 +226,10 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
     }
   }
 
-  async function handleSubmit(input: { text: string; attachments: { id: string; mime: string }[] }) {
+  async function handleSubmit(input: ComposerSubmit) {
+    if (chat.running && !chat.activeRun) {
+      throw new Error("Wait for both replies to finish, or stop them first.");
+    }
     if (chat.running && input.attachments.length === 0) {
       stickToBottom.current = true;
       if (await chat.steer(input.text)) return true;
@@ -153,7 +237,7 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
     return sendTurn(input);
   }
 
-  async function handleInterrupt(input: { text: string; attachments: { id: string; mime: string }[] }) {
+  async function handleInterrupt(input: ComposerSubmit) {
     stickToBottom.current = true;
     const ok = await chat.interrupt(input.text.trim() || undefined);
     if (!ok && input.text.trim()) return sendTurn(input);
@@ -221,6 +305,7 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
         {chat.threadId && (
           <div className="absolute top-3 right-3 z-20 flex items-center gap-2">
             <SandboxFiles threadId={chat.threadId} running={chat.running} />
+            {!isSubagent && chat.messages.length > 0 && <ShareMenu threadId={chat.threadId} disabled={chat.sending} />}
           </div>
         )}
         <div ref={scrollRef} onScroll={onScroll} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
@@ -234,7 +319,14 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
                 How can I help, {user.name.split(" ")[0]}?
               </h1>
               <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                Start a thread with the agent.
+                {project ? (
+                  <>
+                    New thread in <span className="font-medium text-foreground">{project.name}</span>. The agent will follow the
+                    project&apos;s instructions and files.
+                  </>
+                ) : (
+                  "Start a thread with the agent."
+                )}
               </p>
               {!modelsLoading && models.length === 0 && (
                 <p className="mt-6 rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
@@ -251,25 +343,77 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
             </div>
           ) : (
             <div className="mx-auto flex max-w-3xl flex-col gap-8 px-4 pt-14 pb-8 sm:px-6">
-              {chat.messages.map((m) =>
-                m.role === "USER" ? (
+              {chat.messages.map((m) => (
+                <div
+                  key={m.id}
+                  id={`msg-${m.id}`}
+                  className={cn("scroll-mt-16 rounded-2xl transition-shadow duration-700", highlightId === m.id && "ring-2 ring-primary/40 ring-offset-4 ring-offset-background")}
+                >
+                {m.role === "USER" ? (
                   <UserMessage
                     key={m.id}
                     message={m}
                     canEdit={!busy && !m.id.startsWith("temp_")}
                     onEdit={(text) => handleEdit(m.id, text)}
+                    branch={branches.get(m.id)}
+                    onSwitchBranch={onSwitchBranch}
+                    branchDisabled={busy}
                   />
+                ) : compareGroups.get(m.id) ? (
+                  <div className="grid gap-4 md:grid-cols-2 xl:-mx-24">
+                    {compareGroups.get(m.id)!.map((c) => {
+                      const selected = c.id === m.id;
+                      return (
+                        <div
+                          key={c.id}
+                          className={cn(
+                            "min-w-0 rounded-2xl border p-4",
+                            selected ? "border-primary/40 bg-card" : "border-dashed bg-card/40",
+                          )}
+                        >
+                          <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+                            <Columns2 className="size-3.5" />
+                            <span className="truncate font-medium text-foreground/85">
+                              {c.modelId ? (modelNames.get(c.modelId) ?? c.modelId) : "Model"}
+                            </span>
+                            {selected && <span className="ml-auto rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">Continuing</span>}
+                          </div>
+                          <AssistantMessage
+                            message={c}
+                            modelName={c.modelId ? (modelNames.get(c.modelId) ?? null) : null}
+                            canRegenerate={!busy && selected}
+                            isLast={c.id === lastAssistantId}
+                            onRegenerate={() => handleRegenerate(c.id)}
+                            branch={selected ? branches.get(c.id) : null}
+                            onSwitchBranch={onSwitchBranch}
+                            branchDisabled={busy}
+                            footer={
+                              !selected && c.status !== "STREAMING" ? (
+                                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={busy} onClick={() => onSwitchBranch(c.id)}>
+                                  Continue with this
+                                </Button>
+                              ) : null
+                            }
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
                 ) : (
                   <AssistantMessage
                     key={m.id}
                     message={m}
                     modelName={m.modelId ? (modelNames.get(m.modelId) ?? null) : null}
-                    canRegenerate={!busy && m.id === lastAssistantId}
+                    canRegenerate={!busy}
                     isLast={m.id === lastAssistantId}
                     onRegenerate={() => handleRegenerate(m.id)}
+                    branch={branches.get(m.id)}
+                    onSwitchBranch={onSwitchBranch}
+                    branchDisabled={busy}
                   />
-                ),
-              )}
+                )}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -305,6 +449,17 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
           </div>
         ) : (
           <div className="mx-auto w-full max-w-3xl px-3 pb-3 sm:px-6 sm:pb-4">
+            {project && (
+              <div className="mb-2 flex justify-center">
+                <Link
+                  href={`/projects/${project.id}`}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <FolderOpen className="size-3.5 shrink-0" />
+                  <span className="truncate">{project.name}</span>
+                </Link>
+              </div>
+            )}
             <Composer
               models={models}
               modelId={modelId}
@@ -314,12 +469,15 @@ export function ChatView({ threadId: initialThreadId }: { threadId: string | nul
               onWebSearchChange={onWebSearchChange}
               onSubmit={handleSubmit}
               onStop={() => void chat.stop()}
-              onInterrupt={handleInterrupt}
+              onInterrupt={chat.running && !chat.activeRun ? undefined : handleInterrupt}
               pendingSteers={chat.pendingSteers}
               running={chat.running}
               sending={chat.sending}
               context={chat.meta?.lastContext ?? null}
               spentMicros={chat.meta?.spentMicros ?? 0}
+              compare={compare}
+              onCompareChange={setCompare}
+              notice={spendNotice}
               autoFocus
             />
             <p className="mt-2 text-center text-[11px] text-muted-foreground/70">

@@ -5,6 +5,7 @@ import type { ContextSnapshot } from "@/lib/parts";
 import { formatTokens, formatUsd } from "@/lib/money";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { cn } from "@/lib/utils";
+import { useLimits, type LimitWindow } from "@/hooks/queries";
 
 export type ContextModelInfo = {
   displayName: string;
@@ -53,6 +54,7 @@ export function ContextIndicator({
   spentMicros: number;
 }) {
   const [open, setOpen] = useState(false);
+  const { data: limits } = useLimits();
   const used = estimateNextPrompt(context);
   const window = model?.contextWindow ?? null;
   const pct = window ? used / window : 0;
@@ -125,12 +127,39 @@ export function ContextIndicator({
             </>
           )}
         </div>
-        <div className="flex items-center justify-between border-t px-3.5 py-2 text-xs">
-          <span className="text-muted-foreground">Spent in this thread</span>
-          <span className="font-medium tabular-nums">{formatUsd(spentMicros)}</span>
+        <div className="space-y-1 border-t px-3.5 py-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Spent in this thread</span>
+            <span className="font-medium tabular-nums">{formatUsd(spentMicros)}</span>
+          </div>
+          {limits && !limits.unlimited && (
+            <>
+              <BudgetRow label="Left this week" w={limits.weekly} />
+              <BudgetRow label="Left this month" w={limits.monthly} />
+            </>
+          )}
         </div>
       </HoverCardContent>
     </HoverCard>
+  );
+}
+
+function BudgetRow({ label, w }: { label: string; w: LimitWindow }) {
+  if (w.limitMicros == null) return null;
+  const left = Math.max(0, w.limitMicros - w.spentMicros);
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-muted-foreground">{label}</span>
+      <span
+        className={cn(
+          "font-medium tabular-nums",
+          w.alert === "reached" && "text-destructive",
+          w.alert === "warning" && "text-amber-600 dark:text-amber-400",
+        )}
+      >
+        {formatUsd(left)} <span className="font-normal text-muted-foreground">of {formatUsd(w.limitMicros)}</span>
+      </span>
+    </div>
   );
 }
 

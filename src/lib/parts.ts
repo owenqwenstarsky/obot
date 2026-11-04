@@ -85,6 +85,17 @@ export type ToolDisplay =
       modelId: string;
       status: SubagentTaskStatusValue;
     }
+  | {
+      kind: "fetch";
+      url: string;
+      finalUrl: string;
+      title: string | null;
+      status: number;
+      contentType: string;
+      chars: number;
+      truncated: boolean;
+    }
+  | { kind: "memory"; action: "saved" | "forgotten"; memoryId: string; content: string }
   | { kind: "json"; value: unknown };
 
 /** A locally executed function tool call (sandbox, artifacts, sub-agents, ...). */
@@ -138,6 +149,19 @@ export type ErrorPart = {
 
 export type UserTextPart = { type: "user_text"; id: string; text: string };
 export type UserImagePart = { type: "user_image"; id: string; attachmentId: string; mime: string };
+/** A document (PDF or text file) attached to a user message; its text is sent to the model. */
+export type UserFilePart = {
+  type: "user_file";
+  id: string;
+  attachmentId: string;
+  fileName: string;
+  mime: string;
+  size: number;
+  /** Characters of extracted text (0 = nothing extractable, e.g. a scanned PDF). */
+  chars?: number;
+  /** Where the original file was copied in the thread's sandbox, if any. */
+  sandboxPath?: string;
+};
 
 export type MessagePart =
   | TextPart
@@ -150,7 +174,8 @@ export type MessagePart =
   | WaitingPart
   | ErrorPart
   | UserTextPart
-  | UserImagePart;
+  | UserImagePart
+  | UserFilePart;
 
 export type ToolPart = WebSearchPart | GenericToolPart | FunctionToolPart;
 
@@ -199,4 +224,16 @@ export function partsToText(parts: MessagePart[]): string {
     .filter((p): p is TextPart | UserTextPart => p.type === "text" || p.type === "user_text")
     .map((p) => p.text)
     .join("\n\n");
+}
+
+export const SEARCH_TEXT_CHARS = 100_000;
+
+/** Text indexed for full-text search: user text, reply text, and steering messages. Pure. */
+export function partsToSearchText(parts: MessagePart[]): string | null {
+  const text = parts
+    .filter((p): p is TextPart | UserTextPart | SteerPart => p.type === "text" || p.type === "user_text" || p.type === "steer")
+    .map((p) => p.text.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  return text ? text.slice(0, SEARCH_TEXT_CHARS) : null;
 }
